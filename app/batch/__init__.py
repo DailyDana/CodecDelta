@@ -1,0 +1,1 @@
+"""CodecDelta batch katmani."""

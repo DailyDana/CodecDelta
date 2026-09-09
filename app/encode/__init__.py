@@ -1,0 +1,1 @@
+"""CodecDelta encode katmani."""
