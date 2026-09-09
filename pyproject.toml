@@ -33,6 +33,11 @@ where = ["."]
 include = ["app*"]
 
 [tool.pytest.ini_options]
+# Depo koku sys.path'e eklenir. Bu olmadan `pytest` ve `python -m pytest` farkli
+# davranir: ikincisi calisma dizinini kendiliginden ekler, birincisi eklemez.
+# Yerelde modul olarak, CI'da konsol betigi olarak cagrildigi icin fark ancak
+# CI'da ortaya cikiyordu ("No module named 'app'"). Tek satirla ikisi esitlenir.
+pythonpath = ["."]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = "-q --tb=short"
