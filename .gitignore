@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Sanal ortam
+.venv/
+venv/
+
+# ffmpeg ikili dosyalari: setup.ps1 indirir, depoya girmez (~290 MB)
+bin/
+
+# Paketleme ciktilari
+build/
+dist/
+*.spec
+
+# Calisma zamani onbellegi ve ayarlar
+caps.json
+*.local.json
+
+# Test fixture'lari: ses dosyalari depoya girmez, tools/make_fixtures.py uretir
+tests/fixtures/*.flac
+tests/fixtures/*.wav
+tests/fixtures/*.opus
+tests/fixtures/*.mp3
+tests/fixtures/*.m4a
+tests/fixtures/*.ogg
+tests/fixtures/*.mkv
+
+# Analiz ciktilari
+*.report.html
+scratch/
+
+# Windows
+Thumbs.db
+desktop.ini
