@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "codecdelta"
 version = "0.0.1"
 description = "Measure and hear what a lossy encoder did to your audio"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -42,9 +42,9 @@ markers = [
 ]
 
 [tool.mypy]
-# 3.10 hedefi bilincli: kod 3.14'te calisir ama 3.10 sozdizimiyle yazilir,
-# boylece PyInstaller 3.14'te tokezlerse 3.11'e dusmek tek satir kod degistirmez.
-python_version = "3.10"
+# python_version BILEREK verilmiyor: numpy 2.5 stub'lari PEP 695 `type` ifadesi
+# kullaniyor ve mypy bunu 3.12 altinda ayristiramiyor. Sozdizimi tabanini ruff'un
+# target-version'i zorluyor (asagida py311); mypy calisan yorumlayiciyi kullanir.
 files = ["app"]
 strict = true
 warn_return_any = true
@@ -57,7 +57,7 @@ module = "tests.*"
 disallow_untyped_defs = false
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py311"
 line-length = 100
 src = ["app", "tests"]
 
@@ -76,6 +76,9 @@ select = [
 ignore = [
     "S101",     # assert: testlerde ve ic tutarlilik kontrollerinde serbest
 ]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S", "PTH"]
