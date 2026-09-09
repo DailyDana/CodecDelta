@@ -1,0 +1,84 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codecdelta"
+version = "0.0.1"
+description = "Measure and hear what a lossy encoder did to your audio"
+requires-python = ">=3.10"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Daily Dana" }]
+
+dependencies = [
+    "numpy>=2.1",
+    "PyQt6>=6.7",
+    "pyqtgraph>=0.13",
+    "Jinja2>=3.1",
+    "mutagen>=1.47",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "pyinstaller>=6.20",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-q --tb=short"
+markers = [
+    "slow: gercek ffmpeg calistiran, saniyeler suren testler",
+    "needs_ffmpeg: sistemde calisan bir ffmpeg+ffprobe ciftine ihtiyac duyar",
+]
+
+[tool.mypy]
+# 3.10 hedefi bilincli: kod 3.14'te calisir ama 3.10 sozdizimiyle yazilir,
+# boylece PyInstaller 3.14'te tokezlerse 3.11'e dusmek tek satir kod degistirmez.
+python_version = "3.10"
+files = ["app"]
+strict = true
+warn_return_any = true
+disallow_untyped_defs = true
+# numpy disindaki bazi bagimliliklarin stub'i yok; eksik stub hata sayilmaz
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["app", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # isort
+    "UP",       # pyupgrade
+    "B",        # bugbear
+    "SIM",      # simplify
+    "RUF",      # ruff kendi kurallari
+    "PTH",      # os.path yerine pathlib
+    "S",        # bandit: subprocess cagrilarini gozden gecirtir
+]
+ignore = [
+    "S101",     # assert: testlerde ve ic tutarlilik kontrollerinde serbest
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S", "PTH"]
+
+[tool.ruff.format]
+quote-style = "double"

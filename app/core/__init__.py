@@ -1,0 +1,1 @@
+"""CodecDelta core katmani."""

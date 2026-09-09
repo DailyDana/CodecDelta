@@ -1,0 +1,12 @@
+# Calisma zamani bagimliliklari. Surumler pyproject.toml ile ayni tutulur.
+#
+# scipy ve matplotlib bilincli olarak YOK:
+#   - FFT toplam analiz butcesinin ~%1'i (10 dk parcada 0.16 s olculdu), scipy'nin
+#     float32 kazanci gercek ama gereksiz. cp314 wheel'i var, profil gerektirirse eklenir.
+#   - matplotlib ~60 MB, soguk import ~1.2 s ve tema kilitli PNG uretir; cizim icin
+#     pyqtgraph (cizgi) + numpy->QImage (spektrogram) + elle inline SVG (rapor) kullanilir.
+numpy>=2.1
+PyQt6>=6.7
+pyqtgraph>=0.13
+Jinja2>=3.1
+mutagen>=1.47
