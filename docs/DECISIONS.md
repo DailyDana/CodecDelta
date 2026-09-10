@@ -103,6 +103,30 @@ binaries, and a zero must never be read as "cut at 0 Hz".
 Still unverified: no real LAME encoder exists on this machine, so a populated
 lowpass field has only been exercised against a synthetic tag.
 
+### Parabolic interpolation cannot cross-check a delay estimate
+
+Sub-sample alignment was to be measured two ways so the methods could confirm
+each other. Parabolic interpolation on the correlation peak was the second
+method until it was measured. True delay 0.30 samples:
+
+| Method | Estimate |
+|---|---|
+| parabolic on the PHAT correlation | 0.020 |
+| parabolic on a plain correlation | 0.216 |
+| phase slope | 0.29999 |
+
+Worse, the bias is signal-dependent. For the same 0.30 delay, parabolic on a
+plain correlation gave 0.284 when the signal was limited to 0.20 of Nyquist and
+0.0998 when it reached 0.48. A parabola does not fit a sinc-like peak, and the
+peak's width moves with the signal's bandwidth, so the error cannot be
+calibrated away. A measurement whose bias depends on the input cannot serve as
+independent verification of another measurement.
+
+Replaced by a golden-section search that directly maximises the inner product of
+the shifted reference against the test, which is equivalent to minimising
+residual energy — the quantity the whole pipeline is about. It agrees with the
+phase slope to better than 0.01 samples.
+
 ---
 
 ## Deliberately not built
