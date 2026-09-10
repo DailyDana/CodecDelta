@@ -80,12 +80,15 @@ uv pip install -r requirements-dev.txt
 .venv\Scripts\python -m pytest
 ```
 
-## ffmpeg and licensing
+## ffmpeg
 
-CodecDelta is MIT licensed and does **not** bundle or redistribute ffmpeg; it locates an
-ffmpeg already present on the system. If that build is GPL-licensed, its own license governs
-that binary, not this source tree.
+CodecDelta does **not** bundle or redistribute ffmpeg; it locates an ffmpeg already present
+on the system. ffmpeg is separately licensed and its own terms govern that binary.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+GNU General Public License v3.0 or later — see [LICENSE](LICENSE).
+
+You may use, study, modify and redistribute this software. If you distribute a modified
+version, you must release its source under the same licence. Commercial use is permitted;
+making it closed-source is not.

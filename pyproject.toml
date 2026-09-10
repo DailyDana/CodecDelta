@@ -8,7 +8,7 @@ version = "0.0.1"
 description = "Measure and hear what a lossy encoder did to your audio"
 requires-python = ">=3.11"
 readme = "README.md"
-license = "MIT"
+license = "GPL-3.0-or-later"
 license-files = ["LICENSE"]
 authors = [{ name = "Daily Dana" }]
 
