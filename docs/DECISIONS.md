@@ -168,6 +168,56 @@ Note for later: on real codec pairs the status is now `disagree` almost always,
 because the phase estimator really is wrong there. Until it is repaired the flag
 carries little information for the tool's primary use case.
 
+### Alignment confidence is a validity measure, not a second estimator
+
+Replacing the broken phase-slope cross-check raised the question of what should
+take its place. Three candidates were measured on identical data: an unwrap-free
+circular phase fit, split-band residual searches, and a validity measure that is
+not a delay estimator at all.
+
+All three tracked the truth equally well, so accuracy did not decide it. What
+decided it was the case a cross-check exists for. Given two unrelated signals:
+
+| | delay returned | correlation |
+|---|---|---|
+| residual search | −0.3723 | — |
+| circular phase fit | −0.6029 | — |
+| validity measure | — | **0.0035** |
+
+A delay estimator always returns a number. Two of them return two different
+plausible numbers, both wrong. Only a validity measure can answer whether there
+is a delay to find at all, which is the actual failure mode — unrelated
+material, a delay outside the search range, or a relationship that is not a pure
+time shift.
+
+The validity measure is also the cheapest of the three: 2.4 ms against 8.0 ms
+for the circular fit and 23.0 ms for split-band, at a 16k window.
+
+### Sharpness does not discriminate — an earlier reading was an artefact
+
+Peak sharpness — residual half a sample off the optimum over residual at the
+optimum — first appeared to separate valid from invalid by six orders of
+magnitude, 9.6 million against 1.03. That measurement compared a signal with
+itself, where the residual goes to zero and the ratio explodes. It does not
+generalise.
+
+Measured on real inputs:
+
+| | sharpness | correlation |
+|---|---|---|
+| valid (lossless … Opus 32k, down to 6 dB SNR) | **1.02** – 495384 | **0.893** – 1.0000 |
+| invalid (unrelated, out-of-range delay) | 1.000 – **1.131** | −0.231 – **0.485** |
+
+The sharpness ranges overlap completely: Opus at 32 kbps gives 1.1 and MP3 at
+64 kbps gives 1.6, while a deliberately unrelated pair gives up to 1.131.
+Correlation separates cleanly instead, and it is what the status is derived
+from. Sharpness is still reported because it describes how sharply the delay is
+defined, but a test exists specifically to stop a threshold being attached to it.
+
+The threshold lives in `app/align/thresholds.py` with its evidence, and is
+marked as a placeholder: the invalid sample is four constructed cases, not a
+labelled set of real pairs.
+
 ---
 
 ## Deliberately not built
