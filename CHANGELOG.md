@@ -26,3 +26,16 @@ While the version is `0.x`, the API may break between minor versions.
 - `core.settings` — defensive `%APPDATA%` preferences with clamping.
 - `core.privacy` — path and identity scrubbing so reports are shareable by
   default, with an `audit()` backstop.
+- `bitstream.ogg` — page and packet reader with sampled CRC verification and
+  CRC-validated resync.
+- `bitstream.opus` — OpusHead, OpusTags and per-packet TOC statistics: mode,
+  bandwidth, frame duration, VBR and measured bitrate.
+- `bitstream.vorbis` — identification and comment headers, measured bitrate.
+- `bitstream.flac` — metadata blocks, compression ratio excluding embedded
+  artwork, encoder family from the vendor string, and MD5 verification.
+- `bitstream.mp3` — frame headers, Xing/Info and the LAME tag including the
+  declared lowpass cutoff.
+
+### Fixed
+- pytest now puts the repo root on `sys.path`, so the console script and
+  `python -m pytest` behave identically.
