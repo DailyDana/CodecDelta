@@ -127,6 +127,47 @@ the shifted reference against the test, which is equivalent to minimising
 residual energy — the quantity the whole pipeline is about. It agrees with the
 phase slope to better than 0.01 samples.
 
+### Sub-sample delay is selected by residual search, never by phase slope
+
+An adversarial audit measured both estimators over 12,600 synthetic trials plus
+real music and real codec pairs. Phase-slope failure rate (error > 0.05 samples):
+
+| Dataset | phase | residual |
+|---|---|---|
+| band-limited noise, 24 dB SNR | 5.67% | 0.00% |
+| sparse/tonal spectrum, **no noise at all** | 31.67% | 0.00% |
+| real music, **no noise at all** | 22.92% | 0.00% |
+| real music vs lowpassed copy (the tool's actual input) | **79.17%** | 0.00% |
+| real FLAC vs Opus/MP3/AAC/Vorbis pairs | 6 of 6 | 0 of 6 |
+
+Errors reached 122 samples against a true delay of 0.30.
+
+The cause is `np.unwrap`, not noise. It runs over every bin in the fitted band;
+a single low-magnitude bin flips the branch by 2π and every subsequent bin
+inherits the offset. Magnitude weighting reduces that bin's own contribution but
+cannot undo the corruption of the good bins after it. Sparse spectra therefore
+fail at infinite SNR — and tonal music is sparse: for a tonal signal the top 1%
+of bins carry 78.6% of the fit weight against 6.2% for white noise.
+
+Filtering low-magnitude bins before unwrapping was tried and rejected. It fixes
+the tonal and lowpass cases but fails under spectral dropout — errors of 150 to
+400 samples — because removing bins destroys the adjacency that unwrap depends
+on. Any unwrap-based estimator is structurally fragile for this input class.
+
+Selection therefore has no branch: when the residual search produces a value it
+is always returned, even when the two agree. Preferring phase on agreement was
+the original defect, and leaving that branch in place is the only way it could
+return. Measured after the change: 0.00% failure on every dataset above.
+
+The phase slope is kept purely as a cross-check. `agree` was measured as a
+detector at 99.97% capture with 0.00% false alarms, which is why the fix is
+cheap: the information needed was already being computed correctly and simply
+discarded.
+
+Note for later: on real codec pairs the status is now `disagree` almost always,
+because the phase estimator really is wrong there. Until it is repaired the flag
+carries little information for the tool's primary use case.
+
 ---
 
 ## Deliberately not built

@@ -22,6 +22,26 @@ import numpy as np
 MIN_FFT_LENGTH = 8
 
 
+def ensure_signal(x: np.ndarray, name: str = "signal") -> np.ndarray:
+    """Bir dizinin tek boyutlu ve sonlu oldugunu dogrular.
+
+    Neden zorunlu: `open_pcm` bloklari (frames, channels) seklinde uretir, yani
+    hizalama fonksiyonlarina 2 boyutlu bir dizi vermek DOGAL bir hatadir. Kontrol
+    olmadan bu, numpy'nin icinden `IndexError: boolean index did not match` gibi
+    ilgisiz bir hata olarak cikiyordu.
+
+    NaN/inf kontrolu de burada: bozuk ornekler tahmin edicilerin icine girerse
+    karsilastirmalar sessizce False doner ve altin oran aramasi arama sinirina
+    yapisip GUVENILIR gorunen bir cevap uretir. Denetimde olculdu: NaN iceren
+    girdi `residual=+1.0, agree=True` veriyordu.
+    """
+    if x.ndim != 1:
+        raise ValueError(f"{name} tek boyutlu olmali, {x.ndim} boyut verildi")
+    if x.size and not bool(np.isfinite(x).all()):
+        raise ValueError(f"{name} sonlu olmayan deger iceriyor (NaN veya inf)")
+    return x
+
+
 def next_fast_len(n: int) -> int:
     """FFT icin verimli bir uzunluk secer (2'nin kuvveti).
 

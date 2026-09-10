@@ -22,7 +22,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from app.dsp.transforms import next_fast_len
+from app.dsp.transforms import ensure_signal, next_fast_len
 
 # PHAT bolmesinde sifira bolmeyi engelleyen taban. Mutlak degil goreli:
 # sinyal olcegi degistiginde davranis degismemeli.
@@ -90,6 +90,8 @@ def phat_correlation(reference: np.ndarray, test: np.ndarray) -> np.ndarray:
     Indeks k, k ornekli gecikmeye karsilik gelir; negatif gecikmeler dizinin
     sonundan sarar (n-1 = -1 gecikmesi).
     """
+    ensure_signal(reference, "reference")
+    ensure_signal(test, "test")
     n = next_fast_len(reference.size + test.size)
     spectrum_a = np.fft.rfft(reference, n)
     spectrum_b = np.fft.rfft(test, n)
@@ -117,7 +119,11 @@ def estimate(
 
     Tepe MUTLAK degere gore aranir; boylece polaritesi ters bir kopya da
     bulunur ve isaret `correlation` alaninda tasinir.
+
+    Bicimsiz girdi (2 boyutlu dizi, NaN/inf) `ValueError` firlatir.
     """
+    ensure_signal(reference, "reference")
+    ensure_signal(test, "test")
     if reference.size == 0 or test.size == 0:
         return LagEstimate(lag=0, correlation=0.0, psr=0.0)
 
