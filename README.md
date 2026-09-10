@@ -37,6 +37,11 @@ Early development. Not yet usable.
 Video files are accepted as input and never have their video decoded — a 20 GB concert MKV
 costs the same as its audio track alone.
 
+## Design notes
+
+Choices that are not obvious from the code — and the heuristics that were measured
+and then removed — are recorded in [docs/DECISIONS.md](docs/DECISIONS.md).
+
 ## Requirements
 
 - Windows 10/11
