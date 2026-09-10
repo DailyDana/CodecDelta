@@ -157,8 +157,8 @@ def test_recovers_fractional_delay(fraction: float) -> None:
     a, b = x[2048:-2048], shifted[2048:-2048]
 
     estimate = refine.refine(a, b, 0)
-    assert estimate.phase_slope == pytest.approx(fraction, abs=0.02)
-    assert estimate.agree
+    assert estimate.delay == pytest.approx(fraction, abs=0.01)
+    assert estimate.status == "ok"
 
 
 def test_combined_integer_and_fractional_delay() -> None:
@@ -170,7 +170,7 @@ def test_combined_integer_and_fractional_delay() -> None:
     assert coarse.lag == 37
     total, estimate = refine.total_delay(a, b, coarse.lag)
     assert total == pytest.approx(37.4, abs=0.05)
-    assert estimate.agree
+    assert estimate.trustworthy
 
 
 def test_phase_intercept_reveals_polarity() -> None:
@@ -184,21 +184,21 @@ def test_phase_intercept_reveals_polarity() -> None:
     assert abs(abs(intercept) - np.pi) < 0.2
 
 
-def test_residual_search_agrees_with_phase_slope() -> None:
-    """Iki bagimsiz yontem ayni cevaba varmali.
+def test_residual_search_is_the_single_estimator() -> None:
+    """`refine.delay` dogrudan artik aramasindan gelmeli.
 
-    Parabolik interpolasyon bu rolu ustlenemiyordu: gercek 0.30 gecikme icin
-    duz korelasyonda 0.216, PHAT uzerinde 0.020 veriyordu ve yanliligi sinyalin
-    bant genisligiyle degisiyordu. Artik enerjisini dogrudan en aza indiren
-    arama, kalibrasyon gerektirmeyen gercek bir ikinci gorus.
+    Ikinci bir tahmin edici ve secim dali bilincli olarak yok; bu test iki
+    yolun ayrisamayacagini kilitliyor.
     """
     x = band_limited_noise(1 << 15, seed=7)
     shifted = transforms.fractional_shift(x, -0.37)
     a, b = x[2048:-2048], shifted[2048:-2048]
 
-    assert refine.residual_min_delay(a, b) == pytest.approx(-0.37, abs=0.01)
+    direct = refine.residual_min_delay(a, b)
+    assert direct == pytest.approx(-0.37, abs=0.01)
     estimate = refine.refine(a, b, 0)
-    assert estimate.agree
+    assert estimate.delay == direct
+    assert estimate.trustworthy
 
 
 def test_residual_search_needs_enough_samples() -> None:

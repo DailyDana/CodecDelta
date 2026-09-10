@@ -11,7 +11,6 @@ import numpy as np
 import pytest
 
 from app.align import gccphat, refine
-from app.align.refine import SubSampleEstimate, _select
 from app.dsp import transforms
 
 
@@ -41,72 +40,104 @@ def analytic_pair(
 # -- secim sozlesmesi -------------------------------------------------------
 
 
-def test_residual_is_returned_even_when_methods_agree() -> None:
-    """Uyusma durumunda bile artik dondurulur.
+def test_refine_returns_exactly_the_residual_search() -> None:
+    """Secim dali YOK: `refine.delay` dogrudan tek tahmin ediciden gelir.
 
-    "Uyusuyorlarsa faz'i al" gibi bir dal birakilmadi: o dal, denetimdeki P0
-    hatasinin geri gelebilecegi tek yer.
+    Eski surumde iki tahmin edici ve aralarinda bir secim vardi; secim
+    basarisiz olani tercih ediyordu (denetimin P0-2 bulgusu). Dalin kosulunu
+    duzeltmek yerine dal kaldirildi, cunku duran bir dal geri gelebilir.
     """
-    delay, method, status, _ = _select(phase=0.3001, residual=0.3000)
-    assert (delay, method, status) == (0.3000, "residual", "ok")
+    x = _band_noise(1 << 14, 21)
+    y = transforms.fractional_shift(x, 0.33)
+    a, b = x[2048:-2048], y[2048:-2048]
+
+    assert refine.refine(a, b, 0).delay == refine.residual_min_delay(a, b)
 
 
-def test_disagreement_returns_residual_not_phase() -> None:
-    """Denetimin P0-2 bulgusu: eski kod burada faz'i donduruyordu."""
-    delay, method, status, agreement = _select(phase=3.38, residual=0.30)
-    assert delay == 0.30
-    assert method == "residual"
-    assert status == "disagree"
-    assert agreement == pytest.approx(3.08)
+def test_phase_slope_is_not_on_the_decision_path() -> None:
+    """Faz egimi modulde duruyor ama `refine` onu CAGIRMIYOR.
 
-
-@pytest.mark.parametrize("bad_phase", [float("inf"), -float("inf"), 50.0, -50.0])
-def test_absurd_phase_never_selected(bad_phase: float) -> None:
-    """inf ve aralik disi degerler eski kodda `best` olarak donuyordu."""
-    delay, method, _, _ = _select(phase=bad_phase, residual=0.30)
-    assert delay == 0.30
-    assert method == "residual"
-
-
-def test_only_residual_available_is_unverified() -> None:
-    """Tek yontem calistiysa sonuc DOGRULANMAMISTIR.
-
-    Eski `agree` alani bu durumda True donuyordu, yani capraz kontrol
-    yapilamadigi halde yapilmis gibi gorunuyordu.
+    Yapisal garanti: cagrilsa bile sonuc degismemeli. Faz'i patlatip sonucun
+    ayni kaldigini gosteriyoruz.
     """
-    delay, method, status, agreement = _select(phase=float("nan"), residual=0.30)
-    assert (delay, method, status) == (0.30, "residual", "unverified")
-    assert np.isnan(agreement)
+    x = _band_noise(1 << 14, 22)
+    y = transforms.fractional_shift(x, -0.28)
+    a, b = x[2048:-2048], y[2048:-2048]
+    before = refine.refine(a, b, 0)
+
+    def explode(*_args: object, **_kwargs: object) -> tuple[float, float]:
+        raise AssertionError("phase_slope_delay karar yolunda cagrildi")
+
+    original = refine.phase_slope_delay
+    refine.phase_slope_delay = explode  # type: ignore[assignment]
+    try:
+        after = refine.refine(a, b, 0)
+    finally:
+        refine.phase_slope_delay = original  # type: ignore[assignment]
+    assert after == before
 
 
-def test_only_phase_available_is_unverified() -> None:
-    delay, method, status, _ = _select(phase=0.30, residual=float("nan"))
-    assert (delay, method, status) == (0.30, "phase", "unverified")
+# -- durum semantigi --------------------------------------------------------
 
 
-def test_nothing_available_is_invalid() -> None:
-    delay, method, status, _ = _select(phase=float("nan"), residual=float("nan"))
-    assert np.isnan(delay)
-    assert (method, status) == ("none", "invalid")
+def test_related_signals_are_ok() -> None:
+    x = _band_noise(1 << 14, 23)
+    y = transforms.fractional_shift(x, 0.2)
+    est = refine.refine(x[2048:-2048], y[2048:-2048], 0)
+    assert est.status == "ok"
+    assert est.trustworthy and est.usable
+    assert est.correlation > 0.99
+    assert est.sharpness >= 1.0
 
 
-def test_agree_property_is_false_when_unverified() -> None:
-    """`agree`, "dogrulandi" demek; "kontrol edemedim" demek DEGIL."""
-    verified = SubSampleEstimate(0.3, "residual", "ok", 0.0001, 0.3, 0.3, 0.0)
-    unverified = SubSampleEstimate(
-        0.3, "residual", "unverified", float("nan"), float("nan"), 0.3, 0.0
-    )
-    assert verified.agree is True
-    assert unverified.agree is False
-    assert unverified.usable is True
+def test_partially_unrelated_signals_are_weak() -> None:
+    """Yarisi iliskisiz cift: gecikme hesaplanir ama uzerine fark kurulamaz.
+
+    Olculen korelasyon 0.485; esik 0.60 (bkz. thresholds.py).
+    """
+    n = 1 << 14
+    x = _band_noise(n, 24)
+    shifted = transforms.fractional_shift(x, 0.2)
+    mixed = np.r_[shifted[: n // 2], _band_noise(n, 777)[n // 2 :]]
+    est = refine.refine(x[2048:-2048], mixed[2048:-2048], 0)
+
+    assert est.status == "weak"
+    assert est.usable is True
+    assert est.trustworthy is False
+    assert abs(est.correlation) < 0.60
 
 
-def test_invalid_is_not_usable() -> None:
-    bad = SubSampleEstimate(
-        float("nan"), "none", "invalid", float("nan"), float("nan"), float("nan"), float("nan")
-    )
-    assert bad.usable is False
-    assert bad.agree is False
+def test_unrelated_signals_are_not_trustworthy() -> None:
+    """Iliskisiz ciftte bir gecikme tahmin edicisi HER ZAMAN sayi dondurur.
+
+    Bunu yakalayan sey ikinci bir tahmin edici degil, gecerlilik olcusu.
+    """
+    a = _band_noise(1 << 14, 25)[2048:-2048]
+    b = _band_noise(1 << 14, 9999)[2048:-2048]
+    est = refine.refine(a, b, 0)
+    assert est.trustworthy is False
+
+
+def test_polarity_comes_from_correlation_sign() -> None:
+    x = _band_noise(1 << 14, 26)
+    y = transforms.fractional_shift(x, 0.15)
+    a = x[2048:-2048]
+    assert refine.refine(a, y[2048:-2048], 0).polarity == 1
+    assert refine.refine(a, -y[2048:-2048], 0).polarity == -1
+
+
+def test_sharpness_is_reported_but_gates_nothing() -> None:
+    """Keskinlik gecerli/gecersiz ayrimi yapamaz -- olculdu, tamamen ortusuyor.
+
+    Gecerli vakalar 1.02'ye kadar iniyor, gecersizler 1.131'e kadar cikiyor.
+    Bu test, ileride keskinlige bir esik baglanmasini engellemek icin var.
+    """
+    x = _band_noise(1 << 14, 27)
+    y = transforms.fractional_shift(x, 0.4)
+    est = refine.refine(x[2048:-2048], y[2048:-2048], 0)
+    assert est.sharpness >= 1.0
+    # Dusuk keskinlik TEK BASINA durumu bozmamali
+    assert est.status == "ok"
 
 
 # -- gercek basarisizligin regresyonu ---------------------------------------
@@ -123,9 +154,10 @@ def test_sparse_spectrum_regression() -> None:
     est = refine.refine(a, b, 0)
 
     # Faz gercekten bozuk olmali; degilse test artik dogru seyi olcmuyordur
-    assert abs(est.phase_slope - 0.30) > 0.5, "faz beklenenden saglam, test guncellenmeli"
-    assert est.status == "disagree"
-    assert est.method == "residual"
+    phase, _ = refine.phase_slope_delay(a, b)
+    assert abs(phase - 0.30) > 0.5, "faz beklenenden saglam, test guncellenmeli"
+    # ...ama secilen deger dogru, cunku faz karar yolunda degil
+    assert est.trustworthy
     assert est.delay == pytest.approx(0.30, abs=0.01)
 
 
