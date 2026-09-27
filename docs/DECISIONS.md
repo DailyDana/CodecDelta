@@ -295,3 +295,42 @@ n≈40 for 80% power. Both are wrong. Computed exactly:
 80% power arrives around n = 26. Power is also not monotonic in n — n = 20 scores
 below n = 16 — because the binomial threshold is an integer and 15/20 is a harder
 bar than 12/16. The UI shows these numbers before a test starts.
+
+## Zarf korelasyonu ortusme sayisina degil, Pearson'a bolunur
+
+Kaba (L1) hizalamada capraz korelasyonu her gecikmedeki ortusme SAYISINA bolmek
+akla yatkin ve yanlis. Az ortusen gecikmelerde bolen kucuktur, gurultu
+boyutlandirilarak buyur ve gercek tepeyi gecer.
+
+Olculdu -- 30 s'lik bir kayitta 18.3 s'den baslayan 4 s'lik kesiti aramak,
+40 farkli tohum:
+
+| Normalizasyon | Dogru gecikme | En buyuk hata |
+|---|---|---|
+| ortusme sayisi (`raw / counts`) | 20/40 | **32.25 s** |
+| ortusen bolgenin Pearson'i | **40/40** | 0.00 s |
+
+Ayrica tepe secerken **mutlak deger alinmaz**. Dalga formunun aksine bir enerji
+zarfinin polaritesi yoktur; negatif korelasyon "ters cevrilmis" degil
+"eslesmiyor" demektir. Basarisiz 20 vakanin yarisinda kazanan gecikmenin rho'su
+negatifti (en dusuk -1.42, ki bu ayni zamanda kuresel z-skorunun kismi
+ortusmede sinir disina tastigini da gosteriyordu -- Pearson artik ortalamayi ve
+olcegi ortusen bolgeden hesapliyor ve +-1 ile sinirli).
+
+## Zarf duzeyinde PSR ayirt etmiyor, o yuzden ariza raporlanmiyor
+
+Plan L1 icin `PSR > 20` bekliyordu. Ayni 40 tohumda olculen:
+
+| | ILGILI | ILGISIZ |
+|---|---|---|
+| `rho` | 0.949 .. 0.977 | 0.058 .. 0.458 |
+| `PSR` | 2.385 .. 6.393 | 1.877 .. 7.097 |
+
+`rho` temiz ayiriyor, PSR araliklari TAMAMEN ortusuyor. Sebep yapisal: zarf
+duzgun bir sinyaldir, komsu gecikmeler neredeyse tepe kadar iyidir, dolayisiyla
+yan lob medyani hicbir zaman dusmez. PSR yalnizca GCC-PHAT'in beyazlatilmis
+keskin tepesinde anlamlidir ve orada kaliyor.
+
+`CoarseMatch.psr` alani kaldirildi. Ayirt etmeyen bir sayiyi raporda tasimak,
+kullaniciya kanit gibi gorunen bir sey vermek olurdu. Bu, `refine`'da
+"keskinlik ayirt etmiyor" bulgusuyla ayni desen.

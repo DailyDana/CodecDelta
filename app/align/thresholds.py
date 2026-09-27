@@ -44,3 +44,20 @@ MIN_ALIGNMENT_CORRELATION = 0.60
 #
 # Keskinlik yine de raporlanir -- gecikmenin ne kadar keskin tanimlandigini
 # soyler ve kullanicinin gormesi anlamlidir -- ama hicbir karar ona baglanmaz.
+
+
+# Zarf (L1) duzeyinde "bu ayni kayit mi" esigi. Bunun altinda kaba hizalama
+# guvenilmezdir ve boru hatti "ayni kaydi icermiyor" demeye hazirlanmalidir.
+MIN_ENVELOPE_CORRELATION = 0.70
+# OLCULEN (40 tohum, sentetik dinamik gurultu, 8 kHz zarf):
+#   ILGILI  (3 s kayma + alcak geciren 0.18) 0.949 .. 0.977
+#   KESIT   (30 s icinde 4 s)                1.000 .. 1.000
+#   ILGISIZ (bagimsiz kaynak)                0.058 .. 0.458
+# Bosluk genis (0.458 / 0.949); esik ortasina degil, ilgili tarafin guvenli
+# altina kondu. ORNEKLEM SENTETIK: gercek etiketli ciftlerle dogrulanmali.
+#
+# PSR (tepe/yan-lob) icin esik YOK ve bilincli olarak yok. Ayni 40 tohumda
+# ILGILI 2.385..6.393 ve ILGISIZ 1.877..7.097 -- TAMAMEN ortusuyor. Sebep:
+# zarf duzgundur, komsu gecikmeler neredeyse tepe kadar iyidir, yani yan lob
+# medyani hicbir zaman dusmez. PSR yalnizca GCC-PHAT'in beyazlatilmis keskin
+# tepesinde anlamlidir; orada kalir (bkz. gccphat.LagEstimate).
