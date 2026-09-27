@@ -424,3 +424,33 @@ araligini asan her oran) yeniden orneklenmis, PAL'de perdesi kaymis baska bir
 master'dir ve codec farki olculemez. Birkac 10 ppm'lik etiketsiz saat kaymasi
 ise ayni icerigin iki farkli saatle calinmasidir; global yeniden ornekleme
 yapilmaz, gecikme blok-yerel izlenir (`needs_tracking`).
+
+## `-ss` ile arama her formatta ornek-dogru degil
+
+Hizalama plani gecikmeyi `-ss` ile okunan pencerelerden olcer, ana gecis ise
+dosyayi bastan cozer. Iki zaman cizgisi arasindaki her fark dogrudan gecikme
+hatasidir. OLCULEN (pembe gurultu, 0.5 s on okuma, tam cozumle karsilastirma):
+
+| Kap / codec | Sonuc |
+|---|---|
+| WAV/PCM, FLAC, Ogg Opus | bit-exact |
+| MP3 (Xing'li ve Xing'siz VBR, 40 s ve 25 dk) | bit-exact |
+| M4A/AAC | sapma KONUMA gore 70..820 ornek |
+| Ogg Vorbis | sabit -128 ornek |
+| WebM Opus | sabit -48 ornek (Matroska damgasi ms hassasiyetinde) |
+| MKA FLAC | +-1 ornek titresim |
+
+On okuma olmadan MP3 ve Opus'ta pencerenin ilk ~2000 ornegi de bozuk
+(kodlayicinin arama sonrasi isinmasi, max fark 0.30).
+
+Hizli yol bu yuzden bir BEYAZ liste: yalnizca olculmus (kap, codec) ciftleri.
+Gerisi, bilinmeyenler dahil, dosyayi bastan cozup pencereye kadar atar --
+yavas ama tanim geregi dogru. YouTube sesinin tipik kabi (WebM Opus) guvenli
+yoldan gecer.
+
+Yeniden orneklemede ikinci bir kosul var: arama noktasi iki hizin ortak
+izgarasina (`1/gcd(giris, cikis)` s; 44.1/48 icin 1/300 s) oturmazsa soxr
+farkli bir fazdan baslar. 13.3712 s'den okuma r = 0.9796 verdi. Okuyucu arama
+noktasini izgaraya yuvarlar ve farki kirpar. Sozlesme testi 7 format x 2 hiz
+x izgara ici/disi baslangiclarda `np.array_equal` istiyor; izgara kurali
+kapatildiginda yeniden ornekleyen hizli yol testleri dusuyor (dogrulandi).
