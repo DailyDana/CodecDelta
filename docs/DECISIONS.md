@@ -424,3 +424,151 @@ araligini asan her oran) yeniden orneklenmis, PAL'de perdesi kaymis baska bir
 master'dir ve codec farki olculemez. Birkac 10 ppm'lik etiketsiz saat kaymasi
 ise ayni icerigin iki farkli saatle calinmasidir; global yeniden ornekleme
 yapilmaz, gecikme blok-yerel izlenir (`needs_tracking`).
+
+## `-ss` ile arama her formatta ornek-dogru degil
+
+Hizalama plani gecikmeyi `-ss` ile okunan pencerelerden olcer, ana gecis ise
+dosyayi bastan cozer. Iki zaman cizgisi arasindaki her fark dogrudan gecikme
+hatasidir. OLCULEN (pembe gurultu, 0.5 s on okuma, tam cozumle karsilastirma):
+
+| Kap / codec | Sonuc |
+|---|---|
+| WAV/PCM, FLAC, Ogg Opus | bit-exact |
+| MP3 (Xing'li ve Xing'siz VBR, 40 s ve 25 dk) | bit-exact |
+| M4A/AAC | sapma KONUMA gore 70..820 ornek |
+| Ogg Vorbis | sabit -128 ornek |
+| WebM Opus | sabit -48 ornek (Matroska damgasi ms hassasiyetinde) |
+| MKA FLAC | +-1 ornek titresim |
+
+On okuma olmadan MP3 ve Opus'ta pencerenin ilk ~2000 ornegi de bozuk
+(kodlayicinin arama sonrasi isinmasi, max fark 0.30).
+
+Hizli yol bu yuzden bir BEYAZ liste: yalnizca olculmus (kap, codec) ciftleri.
+Gerisi, bilinmeyenler dahil, dosyayi bastan cozup pencereye kadar atar --
+yavas ama tanim geregi dogru. YouTube sesinin tipik kabi (WebM Opus) guvenli
+yoldan gecer.
+
+Yeniden orneklemede ikinci bir kosul var: arama noktasi iki hizin ortak
+izgarasina (`1/gcd(giris, cikis)` s; 44.1/48 icin 1/300 s) oturmazsa soxr
+farkli bir fazdan baslar. 13.3712 s'den okuma r = 0.9796 verdi. Okuyucu arama
+noktasini izgaraya yuvarlar ve farki kirpar. Sozlesme testi 7 format x 2 hiz
+x izgara ici/disi baslangiclarda `np.array_equal` istiyor; izgara kurali
+kapatildiginda yeniden ornekleyen hizli yol testleri dusuyor (dogrulandi).
+
+## Spektrumda kesirli gecikme: taban -67 dB
+
+Blok-yerel gecikme takibi kesirli gecikmeyi STFT cercevelerine faz rampasi
+olarak uygular (`stft.phase_shift`). Bu yaklasiktir -- pencere kaymaz, yalnizca
+icerik kayar -- ve hatasi bir olcum tabani olusturur. Ilk yazdigim docstring
+"ihmal edilebilir" diyordu; olcum bunu yalanladi. OLCULEN (4096'lik cerceve,
+gercek kesirli kaydirilmis sinyalin STFT'sine gore):
+
+| bant (Nyquist orani) | 0.25 ornek | 0.5 ornek |
+|---|---|---|
+| 0 .. 0.99 | -73 dB | -67 dB |
+| 0.99 .. 1.0 (Nyquist haric) | -23.5 dB | -20.5 dB |
+| son 4 bin (Nyquist haric) | -16.2 dB | -13.2 dB |
+| Nyquist bini | -0.1 dB | +2.9 dB |
+| beyaz gurultu, tum bant | -32 dB | -29 dB |
+
+Beyaz gurultude tum bant hatasi (-29 dB) codec gurultusu gibi gorunecek kadar
+buyuk, ama tamamini en ust birkac bin belirliyor; orada kesirli kayma
+tanimsiz (gercek bir sinyalin Nyquist bileseni gercek olmali). Gercek ses bu
+bantta enerji tasimaz ve bant zaten yeniden orneklemenin tabani yuzunden
+"olculemez". Asil sonuc: kesirli gecikme telafi edildiginde ~64 dB ustundeki
+S/N olculemez. Kalibrasyon referansi ayni yoldan gecirdigi icin bu taban
+raporda satir satir gorunecek.
+
+## Olcum tabani, olctugu sayiyla ayni metrikle olculur
+
+Taban modulu ilk surumde duz farki (`|B - A|^2`) kullaniyordu, gerekcesi
+"resampler'in genlik egimi de hatadir" idi. Yanlis: tabanin karsilastirildigi
+mansettaki S/N INKOHERENT'tir; gecis bandi dalgalanmasi gibi dogrusal etkiler
+oradan zaten ayiklanir. Farkli metrikle olculen taban 18-20 kHz'de 75.5 dB
+verdi, inkoherent 120.7 dB. Birinci sayi olculebilir bantlari "olculemez"
+diye isaretliyordu.
+
+Duzeltilmis taban (FLAC 44.1 -> 48 -> 44.1, 30 s kesit):
+
+| bant | 1-4 k | 4-8 k | 8-12 k | 12-16 k | 16-18 k | 18-20 k | 20-21 k |
+|---|---|---|---|---|---|---|---|
+| taban (dB) | 149.8 | 147.6 | 145.6 | 143.9 | 135.1 | 120.7 | 112.1 |
+| plan olcumu | 148 | | | 140 | | 118 | 50 |
+
+Plandaki 20-21 kHz satiri (50 dB) yeniden uretilemedi; o olcumun yontemi
+kayitli degil. Guncel sayi tekrarlanabilir olan.
+
+## Yeniden ornekleyen zincirde bantlar soxr kesiminde biter
+
+Iki dosya farkli hizdaysa soxr `cutoff * Nyquist` ustunu tanim geregi
+gecirmez (0.99 x 22050 = 21.83 kHz). Bant duzeni Nyquist'e kadar gidiyordu ve
+gercek bir FLAC/Opus ciftinde 22.00-22.05 kHz bandini, tabani -11 dB iken,
+"olculebilir" gosterdi: `S/N < taban - 3` kurali yalnizca "S/N'e inanmak icin
+fazla yuksek" yonunu korur. Bant duzeni artik kesime kirpiliyor; yeni bir
+sayi gerekmedi, `ResampleCfg.cutoff` zaten belgelenmis.
+
+## Ilk gercek sonuc: planlama oturumunun elle analiziyle ortusuyor
+
+Loreena McKennitt, "Beneath a Phrygian Sky": FLAC 44.1/16 ile YouTube Opus
+(~141 kbps), 9.5 dk, 8.7 s'de:
+
+| | elle analiz (planlama) | boru hatti |
+|---|---|---|
+| gecikme | 0 | -0.020 ornek |
+| hizali r | ~0.998 | 0.9983 |
+| genis bant S/N | ~24 dB | duz 24.33 dB, inkoherent 25.62 dB |
+| kazanc | 0.0 dB | -0.01 dB |
+
+Side kanali mid'den belirgin kotu (4-8 kHz: 15.3 dB'e karsi 5.4 dB) --
+joint-stereo'nun beklenen izi. 20-21.83 kHz'de -10.3 dB Opus'un kendi
+kesimi; o bantta taban 91.8 dB oldugu icin zincirden gelmiyor.
+
+## Saat kaymasi: cerceve basina hizalama yetmez, egim yinelemeyle bulunur
+
+Kayipsiz, bilinen kaymali kopya (pembe gurultu, 90 s; `asetrate` hizi tamsayiya
+yuvarladigi icin 44102 -> 45.35 ppm, 44109 -> 204.08 ppm), genis bant codec S/N:
+
+| yontem | 45 ppm | 204 ppm |
+|---|---|---|
+| izlemesiz (orta noktada sabit gecikme) | -4.5 dB | -11.3 dB |
+| cerceve basina gecikme, plan noktalarindan dogru | 33.4 | 20.4 |
+| surekli warp, plan noktalarindan dogru | 41.8 | 28.4 |
+| surekli warp + yinelemeli egim | **72.8** | **89.5** (taban 88.2) |
+
+Uc ayri sebep, uc ayri duzeltme:
+
+1. **Cerceve ici kayma.** 4096'lik cercevede gecikme 45 ppm'de 0.2, 204 ppm'de
+   0.8 ornek degisir. Referans artik her ornek icin kendi konumundan
+   ornekleniyor (`dsp/warp.py`: Kaiser-sinc, 64 tap, 8192 faz). 1024 fazda
+   hata tap sayisindan bagimsiz -66 dB'de takiliyordu -- sinirlayan faz
+   cozunurluguydu; 8192 faz ayni maliyette -82..-87 dB.
+2. **Yanli egim.** Egim asiri hassas olmali: 204 ppm'de binde birlik hata 60
+   s'de 0.5 ornek eder ve kayipsiz S/N'i 166 dB'den 12 dB'e dusurur (sentetik).
+   Plan noktalari kayan pencerelerde olculur; olculen gecikme pencere
+   merkezinin degil ENERJI AGIRLIKLI konumun gecikmesidir. Plan noktalarindan
+   gecen dogru -204.126 ppm verdi (gercek -204.082); uclarda 0.12 ornek. Artik
+   mevcut modelle warp edilmis 1 s'lik pencerelerde kalan gecikme olculup
+   dogruya ekleniyor; warp sonrasi pencere ici kayma ihmal edilebilir, olcumler
+   yansiz.
+3. **Hiz.** Yinelemeler pencereleri her seferinde ffmpeg ile yeniden okuyordu
+   (90 s'lik dosyada 21-31 s). Pencereler bir kez payla okunuyor: 14.5-16 s.
+
+45 ppm'deki 72.8 dB'in kaynagi AYRISTIRILMADI. Dogru uyumu 0.001 ornek
+sapmada ve yakinsama esigini 1e-3'ten 1e-5'e cekmek bir sey degistirmedi;
+en guclu supheli ffmpeg'in 44102 -> 44100 donusumunun tam dogrusal olmamasi,
+yani test verisinin uretimi. Codec gurultusu 20-40 dB'de oldugu icin pratik
+etkisi yok, ama iddia edilmiyor.
+
+Plan, "kucuk kayma 1e-9 hassasiyetinde olculemez, global yeniden ornekleme
+yapma" diyordu. Olcum ilk yarisini yalanladi: tam hizda olculen noktalardan
+gecen dogru o hassasiyete ulasiyor. Ama global yeniden ornekleme yine
+ffmpeg ile yapilamiyor -- `asetrate` hizi tamsayiya yuvarliyor -- o yuzden
+warp numpy'de.
+
+## En ust %1 hicbir zaman raporlanmaz
+
+44.1/44.1 bir ciftte (yeniden ornekleme yok, soxr kirpmasi devrede degil)
+22.00-22.05 kHz bandi taban 3 dB iken "olculebilir" cikti. `S/N < taban - 3`
+kurali yalnizca bir yonu korur. Bant duzeni artik her zaman
+`min(cutoff, 0.99) x Nyquist`te bitiyor: kesirli gecikme en ust %1'de tanimsiz
+(olculen, `stft.phase_shift`) ve bant duyulabilir aralikta degil.

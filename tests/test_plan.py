@@ -206,3 +206,23 @@ def test_rejects_bad_sample_rate() -> None:
     env = from_samples(dynamic_noise(5.0), RATE)
     with pytest.raises(ValueError, match="sample_rate"):
         plan.build(env, env, lambda s, n: np.zeros((n, 1)), lambda s, n: np.zeros((n, 1)), 0)
+
+
+def test_shared_loudness_contour_is_not_the_same_recording() -> None:
+    """Ayni ses yuksekligi egrisi, farkli dalga formu.
+
+    Zarf yalnizca "ne zaman yuksek sesliydi"yi olcer; ayni duzenlemenin iki
+    icrasi onu gecer. Karari dalga formu vermeli. Ilk surum bu durumu "farkli
+    master" deyip olcuyordu (zarf 0.917, capa 0, hizali r 0.024).
+    """
+    rng = np.random.default_rng(40)
+    n = 40 * RATE
+    t = np.arange(n) / RATE
+    contour = 0.2 + 0.8 * (0.5 + 0.5 * np.sin(2 * np.pi * 0.7 * t) * np.sin(2 * np.pi * 0.13 * t))
+    a = np.stack([rng.standard_normal(n) * contour for _ in range(2)], axis=1)
+    b = np.stack([rng.standard_normal(n) * contour for _ in range(2)], axis=1)
+
+    result = run(a, b)
+    assert result.envelope.rho > 0.70, "senaryo zarfi eslestirmiyor"
+    assert result.verdict == "different_recording", result.reasons
+    assert not result.comparable

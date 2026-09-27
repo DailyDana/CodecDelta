@@ -86,7 +86,9 @@ def test_unknown_sample_format_is_rejected() -> None:
 
 def test_resample_cfg_expression() -> None:
     cfg = ResampleCfg(precision=20, cutoff=0.95)
-    assert cfg.filter_expr(44100) == "aresample=44100:resampler=soxr:precision=20:cutoff=0.95"
+    assert cfg.filter_expr(44100) == (
+        "aformat=sample_fmts=dbl,aresample=44100:resampler=soxr:precision=20:cutoff=0.95"
+    )
     assert DEFAULT_RESAMPLE.cutoff == 0.99
 
 

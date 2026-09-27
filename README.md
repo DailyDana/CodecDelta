@@ -19,11 +19,11 @@ question from a single file with no reference: *is this FLAC really lossless, or
 | `bitstream/` — Ogg/Opus, Vorbis, FLAC, MP3 container and codec metadata | working |
 | `dsp/`, `align/` — sub-sample delay estimation and alignment validity | working |
 | coarse alignment, drift/PAL detection, "same recording?" verdict | working (engine only) |
-| difference signal, per-band SNR, measurement-floor calibration | not started |
+| single-pass comparison: per-band SNR (mid/side), linear vs codec-noise split, measured floor, clock-drift tracking | working (engine only) |
 | psychoacoustic verdict, referenceless transcode detection | not started |
 | user interface, encoder panel, HTML report, ABX test, batch scan, packaging | not started |
 
-314 tests, `ruff` + `mypy --strict` clean, CI on Windows.
+373 tests, `ruff` + `mypy --strict` clean, CI on Windows.
 
 ## Why this repository might be worth reading
 
@@ -46,6 +46,13 @@ ideas were implemented, measured, and then removed because the measurement disag
 - **Dividing a correlation by the overlap count finds the wrong place half the time.**
   Locating a 4 s excerpt inside a 30 s recording failed on 20 of 40 seeds, with errors up
   to 32 s. A true Pearson coefficient over the overlap: 40 of 40.
+- **Seeking with `ffmpeg -ss` is not sample-accurate on every format.** Measured against
+  a full decode: exact on WAV, FLAC, Ogg Opus and MP3; off by 70–820 samples on M4A/AAC
+  depending on position, a constant −128 on Ogg Vorbis, −48 on WebM Opus. Only measured
+  formats take the fast path.
+- **ffmpeg can requantise to 16 bits in the middle of a resampling chain.** A 16-bit source
+  round-tripped 44.1→48→44.1 kHz measured 81 dB instead of 148 dB until the chain was
+  forced to floating point.
 - **PAL speed-up cannot be measured by alignment anchors — so it is tested instead.**
   Anchors lose lock beyond about 1000 ppm; PAL is 41,667 ppm. But PAL is not a continuous
   unknown, it is one entry in a short table, and testing each entry recovers it exactly.
