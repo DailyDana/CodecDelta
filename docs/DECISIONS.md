@@ -384,3 +384,43 @@ Ayrica tumu sifir olan bir korelasyon dizisinde `argmax` ilk elemani, yani
 `-limit` gecikmesini seciyordu -- "bilgi yok" durumu icin uydurulmus ve
 tamamen yaniltici bir cevap. Ikisi de duzeltildi: sessizlikte `lag=0`,
 `correlation=0.0`.
+
+## Zarf bir kapi degil, bir ipucu
+
+Zarf korelasyonu dusukse bu tek basina "farkli kayit" demek degildir. Dinamigi
+duz icerikte zarf yalnizca cerceve enerjisinin rastgele dalgalanmasidir ve
+bilgi tasimaz. Iki yerde olculdu:
+
+- `drift.estimate_from_audio` hipotezleri once zarf korelasyonuna gore
+  eliyordu. Duragan test sinyalinde DOGRU hipotez de elendi ve 50 ppm ile NTSC,
+  capalar tek basina kusursuz calisirken, "bilmiyorum" dondu. Artik zarf
+  yalnizca kaba gecikme kaynagi; bilgisizse sifira dusulur, karari capalar verir.
+- Ayni icerik + 3 dB S/N bagimsiz gurultu: zarf rho **0.475** (esik 0.70), hizali
+  dalga formu korelasyonu **0.818**, gecikme 800.002 ornek (dogrusu 800). Zarfa
+  guvenen bir plan bunu "farkli kayit" diye reddederdi.
+
+`plan.build` "farkli kayit" hukmunu ancak zarf VE capa tabanli kanit BIRLIKTE
+basarisiz oldugunda verir.
+
+## Yalnizca olculemeyen oranlar sinanir
+
+Tablodaki 1.0001 girdisi capalarin yakalama araligi icinde (100 ppm < 1000 ppm),
+yani 1.0 hipotezinin artigindan zaten olculur. Ayri bir hipotez olarak da
+sinandiginda gurultude 1.0 ile neredeyse berabere skor aliyor ve rastgele
+kazaniyordu. 0 dB S/N'de 24 denemenin birinde **0.06 ppm "surukelenme"**
+raporlandi -- hipotez yolu kendi siniflandirmasini yapip "ihmal edilebilir"
+kuralini da atliyordu.
+
+Iki duzeltme: sinanan hipotezler 1.0 ve yakalama araligini asan tablo
+oranlariyla sinirli (NTSC 1001, PAL 41667 ve tersi); ve her yol ayni
+siniflandiricidan (`_classify`) geciyor. Duzeltmeden sonra ayni 24 denemede
+sahte surukelenme 0; bes tablo senaryosunda hata yine 0.0 ppm.
+
+## Kucuk saat kaymasi "farkli master" degildir
+
+`DriftEstimate.is_resampling` once 5 ppm ustundeki HER orani "ham S/N
+gosterme" sinifina koyuyordu. Plan bunu ayiriyor: PAL/NTSC (ya da yakalama
+araligini asan her oran) yeniden orneklenmis, PAL'de perdesi kaymis baska bir
+master'dir ve codec farki olculemez. Birkac 10 ppm'lik etiketsiz saat kaymasi
+ise ayni icerigin iki farkli saatle calinmasidir; global yeniden ornekleme
+yapilmaz, gecikme blok-yerel izlenir (`needs_tracking`).
