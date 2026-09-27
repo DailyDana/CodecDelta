@@ -69,7 +69,26 @@ _MIN_WINDOW_FRAMES = 4096
 # (ortusmenin kesri olarak).
 _POSITIONS = (0.5, 0.25, 0.75)
 
+# Saat kaymasi izlenecekse ince gecikme bu noktalarin HEPSINDE olculur ve
+# pipeline noktalardan bir dogru gecirir. Surukelenme tahmininin egimi
+# capalardan gelir ve ~0.1 ppm hassasiyettedir; bu, kaydin merkezinden 300 s
+# uzakta 48 kHz'de 1.4 ornek hata demek -- yuksek frekanslarda korelasyonu
+# dagitmaya yeter. Tam hizda olculen noktalarin dogrusu ornek-alti hassas.
+_TRACK_POSITIONS = (0.1, 0.3, 0.5, 0.7, 0.9)
+
 _CORE_GUARD = 64
+
+
+@dataclass(frozen=True)
+class _Point:
+    """Tek bir tam hiz penceresinde olculen hizalama."""
+
+    position_s: float
+    delay: float
+    lag: LagEstimate
+    fine: SubSampleEstimate
+    ref: np.ndarray
+    test: np.ndarray
 
 
 @dataclass(frozen=True)
@@ -96,6 +115,9 @@ class AlignmentPlan:
     # reference'in i. kanalina karsilik gelen test kanali.
     channel_map: tuple[int, ...]
     reasons: tuple[str, ...]
+    # Tam hizda olculen (test konumu s, gecikme ornek) noktalari. Surukelenme
+    # yoksa tek nokta; izleme gerekiyorsa `_TRACK_POSITIONS` kadar.
+    track: tuple[tuple[float, float], ...] = ()
 
     @property
     def comparable(self) -> bool:
@@ -175,6 +197,7 @@ def build(
         polarity: int = 1,
         gain_db: float = math.nan,
         channel_map: tuple[int, ...] = (),
+        track: tuple[tuple[float, float], ...] = (),
     ) -> AlignmentPlan:
         return AlignmentPlan(
             verdict=verdict,
@@ -190,6 +213,7 @@ def build(
             gain_db=gain_db,
             channel_map=channel_map,
             reasons=tuple(reasons),
+            track=track,
         )
 
     # -- surukelenme ---------------------------------------------------------
@@ -244,7 +268,9 @@ def build(
         return result("unaligned")
     frames = min(frames, span)
 
-    for fraction in _POSITIONS:
+    tracking = drift is not None and drift.needs_tracking
+    points: list[_Point] = []
+    for fraction in _TRACK_POSITIONS if tracking else _POSITIONS:
         test_start = int(lo_s * sample_rate) + int((span - frames) * fraction)
         position_s = (test_start + frames / 2) / sample_rate
         coarse = round(coarse_delay_at(position_s) * sample_rate)
@@ -272,43 +298,59 @@ def build(
         fine = refine.refine(ref_mono, test_mono, lag.lag)
         if not fine.usable:
             continue
-
-        a, b = gccphat.aligned_slices(ref_mono, test_mono, lag.lag)
-        shifted = fractional_shift(a, fine.delay)
-        core = slice(_CORE_GUARD, a.size - _CORE_GUARD)
-        gain = optimal_gain(shifted[core], b[core])
-        delay_samples = coarse + lag.lag + fine.delay
-
-        if fine.status == "ok":
-            verdict: Verdict = "aligned"
-        elif drift is not None and drift.status == "unreliable":
-            # Zarf eslesti ama dalga formu kaydin HICBIR yerinde eslesmiyor: capa
-            # yok ve hizali korelasyon dusuk. Tek kanit zarf, ve zarf yalnizca
-            # "ne zaman yuksek sesliydi"yi olcer -- ayni ses yuksekligi egrisine
-            # sahip iki farkli kayit (ayni duzenlemenin iki icrasi, ayni tremolo
-            # ile uretilmis iki gurultu) onu gecer. Ilk surum bunu "farkli master"
-            # diye etiketleyip OLCUYORDU: zarf 0.917, capa 0, r 0.024.
-            reasons.append(
-                f"envelopes match but waveforms do not (no consistent anchors, aligned "
-                f"correlation {fine.correlation:.2f}): not the same recording"
-            )
-            return result("different_recording", position_s=position_s, lag=lag, fine=fine)
-        else:
-            verdict = "different_master"
-            reasons.append(
-                f"aligned correlation {fine.correlation:.2f} is too low for a pure "
-                "time shift: different master, EQ or partial overlap"
-            )
-        return result(
-            verdict,
-            delay_samples=delay_samples,
-            position_s=position_s,
-            lag=lag,
-            fine=fine,
-            polarity=-1 if gain < 0 else 1,
-            gain_db=db(abs(gain)),
-            channel_map=_channel_map(ref_block, test_block, lag.lag),
+        points.append(
+            _Point(position_s, coarse + lag.lag + fine.delay, lag, fine, ref_block, test_block)
         )
+        if not tracking:
+            break
 
-    reasons.append("no analysis window produced a valid alignment")
-    return result("unaligned")
+    if not points:
+        reasons.append("no analysis window produced a valid alignment")
+        return result("unaligned")
+
+    # Hukum ve kazanc ilk (izlemede: en iyi) noktadan; izleme noktalarindan
+    # yalnizca "ok" olanlar dogruya girer.
+    best = max(points, key=lambda pt: abs(pt.fine.correlation))
+    track = tuple((pt.position_s, pt.delay) for pt in points if pt.fine.status == "ok")
+    if tracking and len(track) < 2:
+        reasons.append(
+            f"clock drift needs at least two aligned points to track, found {len(track)}"
+        )
+    point = best if tracking else points[0]
+    lag, fine = point.lag, point.fine
+    a, b = gccphat.aligned_slices(to_mono(point.ref), to_mono(point.test), lag.lag)
+    shifted = fractional_shift(a, fine.delay)
+    core = slice(_CORE_GUARD, a.size - _CORE_GUARD)
+    gain = optimal_gain(shifted[core], b[core])
+
+    if fine.status == "ok":
+        verdict: Verdict = "aligned"
+    elif drift is not None and drift.status == "unreliable":
+        # Zarf eslesti ama dalga formu kaydin HICBIR yerinde eslesmiyor: capa
+        # yok ve hizali korelasyon dusuk. Tek kanit zarf, ve zarf yalnizca
+        # "ne zaman yuksek sesliydi"yi olcer -- ayni ses yuksekligi egrisine
+        # sahip iki farkli kayit (ayni duzenlemenin iki icrasi, ayni tremolo
+        # ile uretilmis iki gurultu) onu gecer. Ilk surum bunu "farkli master"
+        # diye etiketleyip OLCUYORDU: zarf 0.917, capa 0, r 0.024.
+        reasons.append(
+            f"envelopes match but waveforms do not (no consistent anchors, aligned "
+            f"correlation {fine.correlation:.2f}): not the same recording"
+        )
+        return result("different_recording", position_s=point.position_s, lag=lag, fine=fine)
+    else:
+        verdict = "different_master"
+        reasons.append(
+            f"aligned correlation {fine.correlation:.2f} is too low for a pure "
+            "time shift: different master, EQ or partial overlap"
+        )
+    return result(
+        verdict,
+        delay_samples=point.delay,
+        position_s=point.position_s,
+        lag=lag,
+        fine=fine,
+        polarity=-1 if gain < 0 else 1,
+        gain_db=db(abs(gain)),
+        channel_map=_channel_map(point.ref, point.test, lag.lag),
+        track=track,
+    )

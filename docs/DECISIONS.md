@@ -522,3 +522,53 @@ Loreena McKennitt, "Beneath a Phrygian Sky": FLAC 44.1/16 ile YouTube Opus
 Side kanali mid'den belirgin kotu (4-8 kHz: 15.3 dB'e karsi 5.4 dB) --
 joint-stereo'nun beklenen izi. 20-21.83 kHz'de -10.3 dB Opus'un kendi
 kesimi; o bantta taban 91.8 dB oldugu icin zincirden gelmiyor.
+
+## Saat kaymasi: cerceve basina hizalama yetmez, egim yinelemeyle bulunur
+
+Kayipsiz, bilinen kaymali kopya (pembe gurultu, 90 s; `asetrate` hizi tamsayiya
+yuvarladigi icin 44102 -> 45.35 ppm, 44109 -> 204.08 ppm), genis bant codec S/N:
+
+| yontem | 45 ppm | 204 ppm |
+|---|---|---|
+| izlemesiz (orta noktada sabit gecikme) | -4.5 dB | -11.3 dB |
+| cerceve basina gecikme, plan noktalarindan dogru | 33.4 | 20.4 |
+| surekli warp, plan noktalarindan dogru | 41.8 | 28.4 |
+| surekli warp + yinelemeli egim | **72.8** | **89.5** (taban 88.2) |
+
+Uc ayri sebep, uc ayri duzeltme:
+
+1. **Cerceve ici kayma.** 4096'lik cercevede gecikme 45 ppm'de 0.2, 204 ppm'de
+   0.8 ornek degisir. Referans artik her ornek icin kendi konumundan
+   ornekleniyor (`dsp/warp.py`: Kaiser-sinc, 64 tap, 8192 faz). 1024 fazda
+   hata tap sayisindan bagimsiz -66 dB'de takiliyordu -- sinirlayan faz
+   cozunurluguydu; 8192 faz ayni maliyette -82..-87 dB.
+2. **Yanli egim.** Egim asiri hassas olmali: 204 ppm'de binde birlik hata 60
+   s'de 0.5 ornek eder ve kayipsiz S/N'i 166 dB'den 12 dB'e dusurur (sentetik).
+   Plan noktalari kayan pencerelerde olculur; olculen gecikme pencere
+   merkezinin degil ENERJI AGIRLIKLI konumun gecikmesidir. Plan noktalarindan
+   gecen dogru -204.126 ppm verdi (gercek -204.082); uclarda 0.12 ornek. Artik
+   mevcut modelle warp edilmis 1 s'lik pencerelerde kalan gecikme olculup
+   dogruya ekleniyor; warp sonrasi pencere ici kayma ihmal edilebilir, olcumler
+   yansiz.
+3. **Hiz.** Yinelemeler pencereleri her seferinde ffmpeg ile yeniden okuyordu
+   (90 s'lik dosyada 21-31 s). Pencereler bir kez payla okunuyor: 14.5-16 s.
+
+45 ppm'deki 72.8 dB'in kaynagi AYRISTIRILMADI. Dogru uyumu 0.001 ornek
+sapmada ve yakinsama esigini 1e-3'ten 1e-5'e cekmek bir sey degistirmedi;
+en guclu supheli ffmpeg'in 44102 -> 44100 donusumunun tam dogrusal olmamasi,
+yani test verisinin uretimi. Codec gurultusu 20-40 dB'de oldugu icin pratik
+etkisi yok, ama iddia edilmiyor.
+
+Plan, "kucuk kayma 1e-9 hassasiyetinde olculemez, global yeniden ornekleme
+yapma" diyordu. Olcum ilk yarisini yalanladi: tam hizda olculen noktalardan
+gecen dogru o hassasiyete ulasiyor. Ama global yeniden ornekleme yine
+ffmpeg ile yapilamiyor -- `asetrate` hizi tamsayiya yuvarliyor -- o yuzden
+warp numpy'de.
+
+## En ust %1 hicbir zaman raporlanmaz
+
+44.1/44.1 bir ciftte (yeniden ornekleme yok, soxr kirpmasi devrede degil)
+22.00-22.05 kHz bandi taban 3 dB iken "olculebilir" cikti. `S/N < taban - 3`
+kurali yalnizca bir yonu korur. Bant duzeni artik her zaman
+`min(cutoff, 0.99) x Nyquist`te bitiyor: kesirli gecikme en ust %1'de tanimsiz
+(olculen, `stft.phase_shift`) ve bant duyulabilir aralikta degil.

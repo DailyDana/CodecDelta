@@ -25,14 +25,16 @@ import numpy as np
 
 from app.align import envelope, plan
 from app.align.plan import AlignmentPlan
-from app.compare import calibration
+from app.compare import calibration, tracking
 from app.compare.reader import FFmpegWindowReader, Source, seek_exact
 from app.compare.result import BandResult, ComparisonResult, FileSummary, Status
+from app.compare.tracking import DelayModel
 from app.core.ffmpeg_runner import CancelToken
 from app.core.ffmpeg_stream import DEFAULT_RESAMPLE, PcmStream, ResampleCfg, open_pcm
 from app.core.probe import AudioStreamInfo, Probe, default_stream, probe
+from app.dsp import warp
 from app.dsp.accum import CrossSpectrum, hz_to_bin
-from app.dsp.stft import StreamingStft, phase_shift
+from app.dsp.stft import StreamingStft, hann
 from app.dsp.transforms import db
 
 DEFAULT_FFT_SIZE = 4096
@@ -52,6 +54,9 @@ BAND_EDGES_HZ: tuple[float, ...] = (
     24000.0,
 )
 BROADBAND_HZ = (20.0, 20000.0)
+
+# Raporlanan en ust frekans, Nyquist'in kesri olarak (bkz. `compare`).
+NYQUIST_FRACTION = 0.99
 
 _BLOCK_FRAMES = 1 << 16
 
@@ -120,60 +125,46 @@ def _mid_side(
     return (left + right) * 0.5, (left - right) * 0.5
 
 
-def _skipped(blocks: Iterator[np.ndarray], skip: int) -> Iterator[np.ndarray]:
-    """Akisin ilk `skip` cercevesini atar. Bloklar kopyalanir (tampon yeniden kullanilir)."""
-    for block in blocks:
-        if skip >= block.shape[0]:
-            skip -= block.shape[0]
-            continue
-        yield block[skip:].copy()
-        skip = 0
+class _Buffer:
+    """Akan referansin kayan penceresi; mutlak ornek indeksiyle erisilir."""
 
+    def __init__(self, blocks: Iterator[np.ndarray], stereo: bool) -> None:
+        self._blocks = blocks
+        self._stereo = stereo
+        self.base = 0
+        self.mid = np.zeros(0)
+        self.side = np.zeros(0)
+        self.eof = False
 
-class _Pairer:
-    """Iki akisi ayni uzunlukta parcalar halinde eslestirir.
+    @property
+    def end(self) -> int:
+        return self.base + self.mid.size
 
-    Iki STFT'ye her zaman AYNI sayida ornek verilir; boylece cerceve `t` iki
-    tarafta da ayni zamani temsil eder ve spektrumlar dogrudan eslesir.
-    """
+    def cover(self, start: int, stop: int) -> None:
+        """[start, stop) araligini tampona getirir; `start` oncesini birakir."""
+        self._drop_before(start)
+        while self.end < stop and not self.eof:
+            block = next(self._blocks, None)
+            if block is None:
+                self.eof = True
+                break
+            mid, side = _mid_side(block, tuple(range(block.shape[1])))
+            if self.end + mid.size <= start:
+                # Tamamen gerekli araligin oncesinde: tutmadan gec (uzun atlamalar).
+                self.base += mid.size
+                continue
+            self.mid = np.concatenate([self.mid, mid])
+            if self._stereo and side is not None:
+                self.side = np.concatenate([self.side, side])
+            self._drop_before(start)
 
-    def __init__(self, a: Iterator[np.ndarray], b: Iterator[np.ndarray]) -> None:
-        self._a, self._b = a, b
-        self._buf_a: list[np.ndarray] = []
-        self._buf_b: list[np.ndarray] = []
-        self._len_a = self._len_b = 0
-
-    def __iter__(self) -> Iterator[tuple[np.ndarray, np.ndarray]]:
-        while True:
-            if self._len_a == 0 and not self._fill(self._a, self._buf_a, "a"):
-                return
-            if self._len_b == 0 and not self._fill(self._b, self._buf_b, "b"):
-                return
-            n = min(self._len_a, self._len_b)
-            yield self._take(self._buf_a, n, "a"), self._take(self._buf_b, n, "b")
-
-    def _fill(self, source: Iterator[np.ndarray], buf: list[np.ndarray], side: str) -> bool:
-        block = next(source, None)
-        if block is None:
-            return False
-        buf.append(block)
-        if side == "a":
-            self._len_a += block.shape[0]
-        else:
-            self._len_b += block.shape[0]
-        return True
-
-    def _take(self, buf: list[np.ndarray], n: int, side: str) -> np.ndarray:
-        data = np.concatenate(buf) if len(buf) > 1 else buf[0]
-        head, tail = data[:n], data[n:]
-        buf.clear()
-        if tail.shape[0]:
-            buf.append(tail)
-        if side == "a":
-            self._len_a = tail.shape[0]
-        else:
-            self._len_b = tail.shape[0]
-        return head
+    def _drop_before(self, start: int) -> None:
+        cut = min(max(0, start - self.base), self.mid.size)
+        if cut:
+            self.mid = self.mid[cut:]
+            if self._stereo:
+                self.side = self.side[cut:]
+            self.base += cut
 
 
 def _not_measured(
@@ -218,33 +209,38 @@ def compare(
         ]
         ref_env, test_env = (f.result() for f in env_futures)
 
-    alignment = plan.build(
-        ref_env,
-        test_env,
-        FFmpegWindowReader(ffmpeg, ref_source, resample=resample, cancel=cancel),
-        FFmpegWindowReader(ffmpeg, test_source, resample=resample, cancel=cancel),
-        rate,
-    )
+    read_reference = FFmpegWindowReader(ffmpeg, ref_source, resample=resample, cancel=cancel)
+    read_test = FFmpegWindowReader(ffmpeg, test_source, resample=resample, cancel=cancel)
+    alignment = plan.build(ref_env, test_env, read_reference, read_test, rate)
     if alignment.verdict not in ("aligned", "different_master"):
         return _not_measured(reference, test, alignment, rate, status="not_comparable", notes=notes)
-    if alignment.drift is not None and alignment.drift.needs_tracking:
-        notes.append(
-            f"clock drift of {alignment.drift.ppm:+.1f} ppm needs block-local delay tracking, "
-            "which is not implemented yet; measuring without it would report the drift as noise"
-        )
-        return _not_measured(reference, test, alignment, rate, status="not_measured", notes=notes)
     if alignment.verdict == "different_master":
         notes.append("different master: the difference is not a codec difference")
 
     # -- ana gecis -----------------------------------------------------------
-    whole = round(alignment.delay_samples)
-    fraction = alignment.delay_samples - whole
-    mid, side, samples = _main_pass(
+    model = tracking.from_plan(alignment, rate)
+    if model is None:
+        notes.append("clock drift could not be tracked: too few aligned points")
+        return _not_measured(reference, test, alignment, rate, status="not_measured", notes=notes)
+    if model.slope:
+        model = tracking.refine_model(
+            model,
+            read_reference,
+            read_test,
+            rate,
+            _overlap(model, ref_env.duration_s * rate, test_env.duration_s * rate),
+        )
+        notes.append(
+            f"clock drift tracked: {model.slope * 1e6:+.2f} ppm, "
+            f"largest deviation from the fit {model.max_residual:.3f} samples"
+        )
+    fraction = alignment.delay_samples - round(alignment.delay_samples)
+    measure = _tracked_pass if model.slope else _main_pass
+    mid, side, samples = measure(
         ffmpeg,
         ref_source,
         test_source,
-        whole,
-        fraction,
+        model,
         alignment.channel_map,
         fft_size=fft_size,
         resample=resample,
@@ -256,12 +252,13 @@ def compare(
 
     # -- bantlar + taban -----------------------------------------------------
     nyquist = min(ref_stream.sample_rate, test_stream.sample_rate) / 2.0
-    if ref_stream.sample_rate != test_stream.sample_rate:
-        # Yeniden ornekleyen zincir kesimin ustunu TANIM GEREGI gecirmez; o bant
-        # olculemez, "yok"tur. Ilk surum bandi Nyquist'e kadar raporluyordu ve
-        # gercek bir FLAC/Opus ciftinde 22.00-22.05 kHz'i, tabani -11 dB iken,
-        # "olculebilir" gosterdi.
-        nyquist *= resample.cutoff
+    # En ust %1 hicbir zaman raporlanmaz: kesirli gecikme orada tanimsiz
+    # (olculen, bkz. `stft.phase_shift`: Nyquist bini tam kayip) ve bant
+    # duyulabilir aralikta degil. Tek basina taban kurali bunu yakalamiyor:
+    # 44.1/44.1 bir ciftte 22.00-22.05 kHz bandi taban 3 dB iken "olculebilir"
+    # cikti. Hizlar farkliysa soxr kesimi de ayni sinirdir; ustunu tanim
+    # geregi gecirmez.
+    nyquist *= min(resample.cutoff, NYQUIST_FRACTION)
     layout = band_layout(rate, nyquist)
     broadband_hz = (BROADBAND_HZ[0], min(BROADBAND_HZ[1], nyquist))
     floors = calibration.measure_floor(
@@ -271,7 +268,8 @@ def compare(
         channels=ref_stream.channels,
         source_rate=ref_stream.sample_rate,
         other_rate=test_stream.sample_rate,
-        fractional_delay=fraction,
+        fractional_delay=0.0 if model.slope else fraction,
+        drift_slope=model.slope,
         bands_hz=[*layout, broadband_hz],
         size=fft_size,
         start=_excerpt_start(reference.info.duration),
@@ -311,6 +309,14 @@ def compare(
     )
 
 
+def _overlap(model: DelayModel, ref_length: float, test_length: float) -> tuple[int, int]:
+    """Test icinde, referansin karsiligi olan ornek araligi (kenarlardan %2 pay)."""
+    lo = max(0.0, model.intercept)
+    hi = min(test_length, (ref_length + model.intercept) / (1.0 - model.slope))
+    pad = 0.02 * (hi - lo)
+    return int(lo + pad), int(hi - pad)
+
+
 def _excerpt_start(duration: float | None) -> float | None:
     """Taban kesiti icin baslangic: kaydin ortasina yakin, sessiz giris/cikistan uzak."""
     if duration is None or duration <= calibration.DEFAULT_EXCERPT_S * 1.5:
@@ -322,8 +328,7 @@ def _main_pass(
     ffmpeg: Path,
     ref_source: Source,
     test_source: Source,
-    whole: int,
-    fraction: float,
+    model: DelayModel,
     channel_map: tuple[int, ...],
     *,
     fft_size: int,
@@ -332,16 +337,22 @@ def _main_pass(
 ) -> tuple[CrossSpectrum, CrossSpectrum | None, int]:
     """Iki dosyayi bastan akitip capraz spektrumu biriktirir.
 
-    test[T] = reference[T - d]: d > 0 ise test gerde, test'in basindan d
-    ornek atilir; d < 0 ise reference'in basindan.
+    Test tarafi sabit adimli STFT'dir. Her test cercevesi icin referans
+    cercevesi, o cercevenin ortasindaki gecikmeye gore tampondan ayri ayri
+    alinir: `test[T] = reference[T - d(T)]`. Tamsayi kisim cerceve baslangicini,
+    +-0.5'lik kesir faz rampasini belirler. Gecikme sabitse bu, bir kere ornek
+    atlayip sabit kaydirmakla ayni; kayma varsa her cerceve kendi aninda
+    hizali olur ve ornek dusurme/tekrarlama (tik) hic olmaz.
     """
+    hop = fft_size // 2
+    window = hann(fft_size)
+    freqs = np.arange(fft_size // 2 + 1) / fft_size
     stereo = ref_source.channels >= 2
-    stfts = {
-        name: StreamingStft(fft_size) for name in ("ref_mid", "test_mid", "ref_side", "test_side")
-    }
-    mid = CrossSpectrum(stfts["ref_mid"].bins)
-    side = CrossSpectrum(stfts["ref_side"].bins) if stereo else None
-    total = 0
+    test_mid_stft, test_side_stft = StreamingStft(fft_size, hop), StreamingStft(fft_size, hop)
+    mid = CrossSpectrum(test_mid_stft.bins)
+    side = CrossSpectrum(test_side_stft.bins) if stereo else None
+    offsets = np.arange(fft_size)
+    frame_index = 0
 
     def stream(source: Source) -> PcmStream:
         return open_pcm(
@@ -355,23 +366,110 @@ def _main_pass(
             cancel=cancel,
         )
 
-    identity = tuple(range(ref_source.channels))
     with stream(ref_source) as ref_pcm, stream(test_source) as test_pcm:
-        ref_blocks = _skipped(ref_pcm.blocks(_BLOCK_FRAMES), max(0, -whole))
-        test_blocks = _skipped(test_pcm.blocks(_BLOCK_FRAMES), max(0, whole))
-        for ref_block, test_block in _Pairer(ref_blocks, test_blocks):
-            total += ref_block.shape[0]
-            ref_mid, ref_side = _mid_side(ref_block, identity)
-            test_mid, test_side = _mid_side(test_block, channel_map)
-            # Kesirli gecikme referansa uygulanir: plan `fractional_shift(ref, frac)`in
-            # test'le eslestigini olctu.
-            mid.add(
-                phase_shift(stfts["ref_mid"].push(ref_mid), fraction, fft_size),
-                stfts["test_mid"].push(test_mid),
-            )
-            if side is not None and ref_side is not None and test_side is not None:
-                side.add(
-                    phase_shift(stfts["ref_side"].push(ref_side), fraction, fft_size),
-                    stfts["test_side"].push(test_side),
-                )
-    return mid, side, total
+        buffer = _Buffer(ref_pcm.blocks(_BLOCK_FRAMES), stereo)
+        for block in test_pcm.blocks(_BLOCK_FRAMES):
+            test_mid, test_side = _mid_side(block, channel_map)
+            spectra_mid = test_mid_stft.push(test_mid)
+            spectra_side = test_side_stft.push(test_side) if test_side is not None else None
+            count = spectra_mid.shape[0]
+            if count == 0:
+                continue
+            starts = (frame_index + np.arange(count)) * hop
+            frame_index += count
+
+            ref_start = starts - model.at(starts + fft_size / 2.0)
+            whole = np.round(ref_start).astype(np.int64)
+            # ref[whole + eps + n] gerekiyor (eps = ref_start - whole), yani
+            # tampondan alinan cerceve -eps kadar GECIKTIRILIR.
+            delay = whole - ref_start
+            usable = whole >= 0
+            if not usable.any():
+                continue
+            buffer.cover(int(whole[usable].min()), int(whole[usable].max()) + fft_size)
+            usable &= (whole >= buffer.base) & (whole + fft_size <= buffer.end)
+            if usable.any():
+                index = (whole[usable] - buffer.base)[:, None] + offsets
+                ramp = np.exp(-2j * np.pi * np.outer(delay[usable], freqs))
+                mid.add(np.fft.rfft(buffer.mid[index] * window, axis=1) * ramp, spectra_mid[usable])
+                if side is not None and spectra_side is not None:
+                    side.add(
+                        np.fft.rfft(buffer.side[index] * window, axis=1) * ramp,
+                        spectra_side[usable],
+                    )
+            if buffer.eof and whole[-1] + fft_size > buffer.end:
+                break
+    return mid, side, mid.frames * hop
+
+
+def _tracked_pass(
+    ffmpeg: Path,
+    ref_source: Source,
+    test_source: Source,
+    model: DelayModel,
+    channel_map: tuple[int, ...],
+    *,
+    fft_size: int,
+    resample: ResampleCfg,
+    cancel: CancelToken | None,
+) -> tuple[CrossSpectrum, CrossSpectrum | None, int]:
+    """Saat kaymasi varken: referans her ornek icin kendi konumundan orneklenir.
+
+    Test ornegi T icin referans konumu `P = T - d(T)`; `warp.sample` bunu
+    pencereli sinc ile uretir. Iki STFT'ye kilit adimda AYNI sayida ornek
+    verilir, cerceveler birebir eslesir. Cerceve basina sabit gecikmenin
+    (hizli yol) cerceve ici kaymasi burada yok.
+    """
+    hop = fft_size // 2
+    stereo = ref_source.channels >= 2
+    stfts = [StreamingStft(fft_size, hop) for _ in range(4)]
+    ref_mid_stft, ref_side_stft, test_mid_stft, test_side_stft = stfts
+    mid = CrossSpectrum(ref_mid_stft.bins)
+    side = CrossSpectrum(ref_side_stft.bins) if stereo else None
+    position = 0
+    started = False
+    fed = 0
+
+    def stream(source: Source) -> PcmStream:
+        return open_pcm(
+            ffmpeg,
+            source.path,
+            sample_rate=source.rate,
+            channels=source.channels,
+            stream_index=source.stream_index,
+            rate=source.target_rate,
+            resample=resample,
+            cancel=cancel,
+        )
+
+    with stream(ref_source) as ref_pcm, stream(test_source) as test_pcm:
+        buffer = _Buffer(ref_pcm.blocks(_BLOCK_FRAMES), stereo)
+        for block in test_pcm.blocks(_BLOCK_FRAMES):
+            test_mid, test_side = _mid_side(block, channel_map)
+            times = position + np.arange(test_mid.size, dtype=np.float64)
+            position += test_mid.size
+            wanted = times - model.at(times)
+
+            keep = np.ones(wanted.size, dtype=bool)
+            if not started:
+                keep = wanted >= warp.HALF_TAPS
+                if not keep.any():
+                    continue
+                started = True
+            first = int(np.floor(wanted[keep].min())) - warp.HALF_TAPS + 1
+            last = int(np.floor(wanted[keep].max())) + warp.HALF_TAPS + 1
+            buffer.cover(first, last)
+            done = False
+            if buffer.end < last:
+                keep &= np.floor(wanted) + warp.HALF_TAPS < buffer.end
+                done = True
+            if keep.any():
+                ref_mid = warp.sample(buffer.mid, wanted[keep], base=buffer.base)
+                mid.add(ref_mid_stft.push(ref_mid), test_mid_stft.push(test_mid[keep]))
+                if side is not None and test_side is not None:
+                    ref_side = warp.sample(buffer.side, wanted[keep], base=buffer.base)
+                    side.add(ref_side_stft.push(ref_side), test_side_stft.push(test_side[keep]))
+                fed += int(keep.sum())
+            if done:
+                break
+    return mid, side, fed

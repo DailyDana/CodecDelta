@@ -14,6 +14,9 @@ Bu yuzden her karsilastirmada taban OLCULUR, varsayilmaz:
   yani taban muhafazakardir (gercekten biraz daha kotu gosterir).
 - Kesirli gecikme: ayni kesit zaman alaninda kesirli kaydirilir, spektrumda
   faz rampasiyla geri alinir; artik rampanin hatasidir.
+- Saat kaymasi izleniyorsa faz rampasi kullanilmaz; kesit ayni egimle
+  surekli yeniden orneklenip geri orneklenir (`warp`). Yine gidis-donus, yine
+  muhafazakar.
 
 Iki hata bagimsiz gurultu gibi toplanir.
 """
@@ -28,6 +31,7 @@ import numpy as np
 
 from app.core.ffmpeg_runner import CancelToken
 from app.core.ffmpeg_stream import DEFAULT_RESAMPLE, ResampleCfg, open_pcm
+from app.dsp import warp
 from app.dsp.accum import CrossSpectrum, hz_to_bin
 from app.dsp.stft import StreamingStft, phase_shift
 from app.dsp.transforms import fractional_shift, to_mono
@@ -94,6 +98,20 @@ def _spectral_snr(
     return out
 
 
+def _warp_round_trip(
+    x: np.ndarray, slope: float, size: int, bands: Sequence[tuple[int, int]]
+) -> list[float]:
+    """`warp` ile ileri (T -> T - sT) ve geri orneklemenin bant basina S/N'i."""
+    margin = warp.HALF_TAPS + 1 + int(abs(slope) * x.size) + 1
+    times = np.arange(margin, x.size - margin, dtype=np.float64)
+    forward = warp.sample(x, times - slope * times)
+    # forward[j] = x(t_j - s t_j); geri: P noktasi icin t = P / (1 - s)
+    inner = np.arange(2 * margin, x.size - 2 * margin, dtype=np.float64)
+    back = warp.sample(forward, inner / (1.0 - slope), base=margin)
+    original = x[2 * margin : x.size - 2 * margin]
+    return _band_snr(original, back, size, bands)
+
+
 def combine_floors(*floors_db: float) -> float:
     """Bagimsiz hata kaynaklarinin tabanlarini birlestirir (guc toplami)."""
     total = 0.0
@@ -116,6 +134,7 @@ def measure_floor(
     other_rate: int,
     fractional_delay: float,
     bands_hz: Sequence[tuple[float, float]],
+    drift_slope: float = 0.0,
     size: int,
     start: float | None = None,
     excerpt_s: float = DEFAULT_EXCERPT_S,
@@ -155,6 +174,12 @@ def measure_floor(
         floors = [
             combine_floors(f, r)
             for f, r in zip(floors, _band_snr(clean, round_trip, size, bands), strict=True)
+        ]
+
+    if drift_slope != 0.0:
+        floors = [
+            combine_floors(f, r)
+            for f, r in zip(floors, _warp_round_trip(clean, drift_slope, size, bands), strict=True)
         ]
 
     if fractional_delay != 0.0:

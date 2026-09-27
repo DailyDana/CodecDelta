@@ -67,6 +67,42 @@ def files(ffmpeg_tools: FFmpegTools, tmp_path_factory: pytest.TempPathFactory) -
         check=True,
     )
     out["other"] = _make(ff, root / "other.flac", "-c:a", "flac", seed=99)
+    # Saat kaymasi: asetrate hizi TAMSAYIYA yuvarlar, 44109/44100 = 204.08 ppm.
+    out["drift"] = root / "drift.flac"
+    subprocess.run(
+        [
+            str(ff),
+            "-y",
+            "-v",
+            "error",
+            "-i",
+            str(reference),
+            "-af",
+            "asetrate=44109,aformat=sample_fmts=dbl,"
+            "aresample=44100:resampler=soxr:precision=28:cutoff=0.99",
+            "-c:a",
+            "flac",
+            str(out["drift"]),
+        ],
+        check=True,
+    )
+    out["drift_opus"] = root / "drift.opus"
+    subprocess.run(
+        [
+            str(ff),
+            "-y",
+            "-v",
+            "error",
+            "-i",
+            str(out["drift"]),
+            "-c:a",
+            "libopus",
+            "-b:a",
+            "96k",
+            str(out["drift_opus"]),
+        ],
+        check=True,
+    )
     out["pal"] = root / "pal.flac"
     subprocess.run(
         [
@@ -180,3 +216,30 @@ def test_result_set_is_plural_from_day_one(
     single = ComparisonSet.single(result)
     assert single.items == (result,)
     assert single.sweep_axis is None
+
+
+@pytest.mark.needs_ffmpeg
+def test_clock_drift_is_tracked_down_to_the_floor(
+    ffmpeg_tools: FFmpegTools, files: dict[str, Path]
+) -> None:
+    """Kayipsiz, 204 ppm kaymali kopya. Olculen (90 s): izlemesiz -11.3 dB,
+    cerceve basina hizalamayla 20.4, surekli warp + yinelemeli modelle 89.5 dB
+    -- yani tabanda ("olculemez"), kayipsiz bir kopya icin dogru cevap.
+    """
+    result = _run(ffmpeg_tools, files["ref"], files["drift"])
+    assert result.status == "measured", result.notes
+    assert result.plan.drift is not None and result.plan.drift.needs_tracking
+    assert any("clock drift tracked" in n for n in result.notes)
+    assert result.broadband is not None
+    assert result.broadband.mid.snr_db > 75.0
+
+
+@pytest.mark.needs_ffmpeg
+def test_drift_does_not_change_the_codec_measurement(
+    ffmpeg_tools: FFmpegTools, files: dict[str, Path]
+) -> None:
+    """Ayni codec, ayni bitrate: kayma olsun ya da olmasin S/N ayni cikmali."""
+    plain = _run(ffmpeg_tools, files["ref"], files["opus"])
+    drifted = _run(ffmpeg_tools, files["ref"], files["drift_opus"])
+    assert drifted.status == "measured", drifted.notes
+    assert drifted.headline_snr_db == pytest.approx(plain.headline_snr_db, abs=1.0)
