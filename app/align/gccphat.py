@@ -98,8 +98,14 @@ def phat_correlation(reference: np.ndarray, test: np.ndarray) -> np.ndarray:
     # conj(A) * B uzlasimi: tepe dogrudan test'in gecikmesini verir.
     cross = np.conj(spectrum_a) * spectrum_b
     magnitude = np.abs(cross)
-    floor = _PHAT_FLOOR * (magnitude.max() if magnitude.size else 1.0)
-    cross /= np.maximum(magnitude, floor)
+    peak = float(magnitude.max()) if magnitude.size else 0.0
+    if peak <= 0.0:
+        # Taraflardan biri tamamen sessiz. Goreli taban da sifir olacagi icin
+        # bolme 0/0 = NaN uretir ve NaN tum hizalama zincirine yayilir (bir
+        # sessiz capa penceresinde fiilen gozlendi). Sessizligin dogru cevabi
+        # "korelasyon yok"tur, NaN degil.
+        return np.zeros(n)
+    cross /= np.maximum(magnitude, _PHAT_FLOOR * peak)
     return np.fft.irfft(cross, n)
 
 
@@ -138,6 +144,11 @@ def estimate(
     lags = np.arange(-limit, limit + 1)
 
     magnitude = np.abs(window)
+    if not magnitude.any():
+        # Hicbir gecikmede bilgi yok (taraflardan biri sessiz). argmax burada
+        # dizinin ilk elemanini, yani -limit gecikmesini secerdi -- "bilgi yok"
+        # icin uydurulmus ve tamamen yaniltici bir cevap.
+        return LagEstimate(lag=0, correlation=0.0, psr=0.0)
     peak_index = int(np.argmax(magnitude))
     lag = int(lags[peak_index])
 

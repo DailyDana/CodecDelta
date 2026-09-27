@@ -295,3 +295,132 @@ n≈40 for 80% power. Both are wrong. Computed exactly:
 80% power arrives around n = 26. Power is also not monotonic in n — n = 20 scores
 below n = 16 — because the binomial threshold is an integer and 15/20 is a harder
 bar than 12/16. The UI shows these numbers before a test starts.
+
+## Zarf korelasyonu ortusme sayisina degil, Pearson'a bolunur
+
+Kaba (L1) hizalamada capraz korelasyonu her gecikmedeki ortusme SAYISINA bolmek
+akla yatkin ve yanlis. Az ortusen gecikmelerde bolen kucuktur, gurultu
+boyutlandirilarak buyur ve gercek tepeyi gecer.
+
+Olculdu -- 30 s'lik bir kayitta 18.3 s'den baslayan 4 s'lik kesiti aramak,
+40 farkli tohum:
+
+| Normalizasyon | Dogru gecikme | En buyuk hata |
+|---|---|---|
+| ortusme sayisi (`raw / counts`) | 20/40 | **32.25 s** |
+| ortusen bolgenin Pearson'i | **40/40** | 0.00 s |
+
+Ayrica tepe secerken **mutlak deger alinmaz**. Dalga formunun aksine bir enerji
+zarfinin polaritesi yoktur; negatif korelasyon "ters cevrilmis" degil
+"eslesmiyor" demektir. Basarisiz 20 vakanin yarisinda kazanan gecikmenin rho'su
+negatifti (en dusuk -1.42, ki bu ayni zamanda kuresel z-skorunun kismi
+ortusmede sinir disina tastigini da gosteriyordu -- Pearson artik ortalamayi ve
+olcegi ortusen bolgeden hesapliyor ve +-1 ile sinirli).
+
+## Zarf duzeyinde PSR ayirt etmiyor, o yuzden ariza raporlanmiyor
+
+Plan L1 icin `PSR > 20` bekliyordu. Ayni 40 tohumda olculen:
+
+| | ILGILI | ILGISIZ |
+|---|---|---|
+| `rho` | 0.949 .. 0.977 | 0.058 .. 0.458 |
+| `PSR` | 2.385 .. 6.393 | 1.877 .. 7.097 |
+
+`rho` temiz ayiriyor, PSR araliklari TAMAMEN ortusuyor. Sebep yapisal: zarf
+duzgun bir sinyaldir, komsu gecikmeler neredeyse tepe kadar iyidir, dolayisiyla
+yan lob medyani hicbir zaman dusmez. PSR yalnizca GCC-PHAT'in beyazlatilmis
+keskin tepesinde anlamlidir ve orada kaliyor.
+
+`CoarseMatch.psr` alani kaldirildi. Ayirt etmeyen bir sayiyi raporda tasimak,
+kullaniciya kanit gibi gorunen bir sey vermek olurdu. Bu, `refine`'da
+"keskinlik ayirt etmiyor" bulgusuyla ayni desen.
+
+## PAL olculmez, SINANIR
+
+Capa tabanli surukelenme olcumunun yakalama araligi fiziksel bir sinirla
+bagli: bir pencerede biriken kayma `window * (ratio - 1)` ornektir ve icerigin
+periyodunun yarisini astiginda GCC-PHAT tepesi dagilir. OLCULEN (8 kHz mono,
+300 s, 30 capa, `min_correlation=0.3`):
+
+| sapma | 0.25 s pencere | 1.0 s | 2.0 s |
+|---|---|---|---|
+| 10 ppm | 0.1 ppm hata | 0.1 ppm | 0.0 ppm |
+| 100 ppm | 0.0 ppm | 0.0 ppm | 0.0 ppm |
+| 1000 ppm | **1.0 ppm** | capa YOK | capa YOK |
+| 5000 ppm | capa YOK | capa YOK | capa YOK |
+| 41667 ppm (PAL) | capa YOK | capa YOK | capa YOK |
+
+Varsayilan pencere bu yuzden 2.0 s degil **0.25 s**. Yakalama araligi ~1000 ppm;
+NTSC pulldown (1001 ppm) tam sinirda calisir.
+
+PAL 41667 ppm'dir, yani araligin 40 kati disinda ve **dogrudan olculemez**.
+Cozum orani daha hassas olcmeye calismak degil, soruyu degistirmek: PAL surekli
+bir bilinmeyen degildir, kisa ve AYRIK bir tablodan gelir. O yuzden olculmez,
+sinanir -- her aday oran icin test on telafi edilir ve capalar yeniden
+toplanir; dogru hipotezde pencere ici kayma sifirlanir, capa sayisi ve
+korelasyon birlikte yukselir. Kazanan hipotezin uzerindeki artik oran normal
+yoldan olculur.
+
+OLCULEN (`estimate_from_audio`, 300 s): surukelenme yok, 50 ppm, NTSC, PAL
+hizlandirmasi ve PAL yavaslatmasi -- **besinde de hata 0.0 ppm**.
+
+## Snap toleransi mutlak degil, oransal
+
+Tabloya yakalanma toleransi once sabit `2e-4` idi. Yanlis: tablodaki 1.0001
+girdisinin kendi sapmasi 1e-4'tur, yani +-2e-4'luk bir pencere surukelenmesi
+OLMAYAN bir dosyayi (oran tam 1.0) "1.0001 zamanlama" diye etiketliyordu. Bir
+test bunu yakaladi. Tolerans artik sapmanin %2'si (taban 1e-5), yani her girdi
+kendi olceginde degerlendiriliyor.
+
+## PHAT sessizlikte NaN uretiyordu
+
+`phat_correlation`in bolme tabani GORELIDIR (`1e-12 * magnitude.max()`), ki bu
+sinyal olcegi degistiginde davranisin degismemesi icin dogru karar. Ama girdi
+tamamen sessizse taban da sifir olur ve bolme `0/0 = NaN` verir; NaN
+korelasyondan gecikmeye, oradan surukelenme fit'ine yayilir. `drift`in sessiz
+bir capa penceresine denk gelmesiyle gercekten gozlendi.
+
+Ayrica tumu sifir olan bir korelasyon dizisinde `argmax` ilk elemani, yani
+`-limit` gecikmesini seciyordu -- "bilgi yok" durumu icin uydurulmus ve
+tamamen yaniltici bir cevap. Ikisi de duzeltildi: sessizlikte `lag=0`,
+`correlation=0.0`.
+
+## Zarf bir kapi degil, bir ipucu
+
+Zarf korelasyonu dusukse bu tek basina "farkli kayit" demek degildir. Dinamigi
+duz icerikte zarf yalnizca cerceve enerjisinin rastgele dalgalanmasidir ve
+bilgi tasimaz. Iki yerde olculdu:
+
+- `drift.estimate_from_audio` hipotezleri once zarf korelasyonuna gore
+  eliyordu. Duragan test sinyalinde DOGRU hipotez de elendi ve 50 ppm ile NTSC,
+  capalar tek basina kusursuz calisirken, "bilmiyorum" dondu. Artik zarf
+  yalnizca kaba gecikme kaynagi; bilgisizse sifira dusulur, karari capalar verir.
+- Ayni icerik + 3 dB S/N bagimsiz gurultu: zarf rho **0.475** (esik 0.70), hizali
+  dalga formu korelasyonu **0.818**, gecikme 800.002 ornek (dogrusu 800). Zarfa
+  guvenen bir plan bunu "farkli kayit" diye reddederdi.
+
+`plan.build` "farkli kayit" hukmunu ancak zarf VE capa tabanli kanit BIRLIKTE
+basarisiz oldugunda verir.
+
+## Yalnizca olculemeyen oranlar sinanir
+
+Tablodaki 1.0001 girdisi capalarin yakalama araligi icinde (100 ppm < 1000 ppm),
+yani 1.0 hipotezinin artigindan zaten olculur. Ayri bir hipotez olarak da
+sinandiginda gurultude 1.0 ile neredeyse berabere skor aliyor ve rastgele
+kazaniyordu. 0 dB S/N'de 24 denemenin birinde **0.06 ppm "surukelenme"**
+raporlandi -- hipotez yolu kendi siniflandirmasini yapip "ihmal edilebilir"
+kuralini da atliyordu.
+
+Iki duzeltme: sinanan hipotezler 1.0 ve yakalama araligini asan tablo
+oranlariyla sinirli (NTSC 1001, PAL 41667 ve tersi); ve her yol ayni
+siniflandiricidan (`_classify`) geciyor. Duzeltmeden sonra ayni 24 denemede
+sahte surukelenme 0; bes tablo senaryosunda hata yine 0.0 ppm.
+
+## Kucuk saat kaymasi "farkli master" degildir
+
+`DriftEstimate.is_resampling` once 5 ppm ustundeki HER orani "ham S/N
+gosterme" sinifina koyuyordu. Plan bunu ayiriyor: PAL/NTSC (ya da yakalama
+araligini asan her oran) yeniden orneklenmis, PAL'de perdesi kaymis baska bir
+master'dir ve codec farki olculemez. Birkac 10 ppm'lik etiketsiz saat kaymasi
+ise ayni icerigin iki farkli saatle calinmasidir; global yeniden ornekleme
+yapilmaz, gecikme blok-yerel izlenir (`needs_tracking`).

@@ -18,12 +18,12 @@ question from a single file with no reference: *is this FLAC really lossless, or
 | `core/` — ffmpeg discovery, PCM streaming, ffprobe inspection, settings, privacy, ABX statistics | working |
 | `bitstream/` — Ogg/Opus, Vorbis, FLAC, MP3 container and codec metadata | working |
 | `dsp/`, `align/` — sub-sample delay estimation and alignment validity | working |
-| coarse alignment, drift/PAL detection, "same recording?" verdict | not started |
+| coarse alignment, drift/PAL detection, "same recording?" verdict | working (engine only) |
 | difference signal, per-band SNR, measurement-floor calibration | not started |
 | psychoacoustic verdict, referenceless transcode detection | not started |
 | user interface, encoder panel, HTML report, ABX test, batch scan, packaging | not started |
 
-231 tests, `ruff` + `mypy --strict` clean, CI on Windows.
+314 tests, `ruff` + `mypy --strict` clean, CI on Windows.
 
 ## Why this repository might be worth reading
 
@@ -43,6 +43,12 @@ ideas were implemented, measured, and then removed because the measurement disag
 - **A phase-slope delay estimator failed on 79% of the input class this tool exists for.**
   An adversarial audit measured it across 12,600 synthetic trials plus real music and real
   codec pairs; it was replaced, and the reasoning is written down rather than lost.
+- **Dividing a correlation by the overlap count finds the wrong place half the time.**
+  Locating a 4 s excerpt inside a 30 s recording failed on 20 of 40 seeds, with errors up
+  to 32 s. A true Pearson coefficient over the overlap: 40 of 40.
+- **PAL speed-up cannot be measured by alignment anchors — so it is tested instead.**
+  Anchors lose lock beyond about 1000 ppm; PAL is 41,667 ppm. But PAL is not a continuous
+  unknown, it is one entry in a short table, and testing each entry recovers it exactly.
 
 These are recorded in [docs/DECISIONS.md](docs/DECISIONS.md), with the numbers behind them.
 [docs/SPEC-alignment.md](docs/SPEC-alignment.md) is the contract for the alignment core,
