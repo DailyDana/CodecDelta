@@ -478,3 +478,47 @@ bantta enerji tasimaz ve bant zaten yeniden orneklemenin tabani yuzunden
 "olculemez". Asil sonuc: kesirli gecikme telafi edildiginde ~64 dB ustundeki
 S/N olculemez. Kalibrasyon referansi ayni yoldan gecirdigi icin bu taban
 raporda satir satir gorunecek.
+
+## Olcum tabani, olctugu sayiyla ayni metrikle olculur
+
+Taban modulu ilk surumde duz farki (`|B - A|^2`) kullaniyordu, gerekcesi
+"resampler'in genlik egimi de hatadir" idi. Yanlis: tabanin karsilastirildigi
+mansettaki S/N INKOHERENT'tir; gecis bandi dalgalanmasi gibi dogrusal etkiler
+oradan zaten ayiklanir. Farkli metrikle olculen taban 18-20 kHz'de 75.5 dB
+verdi, inkoherent 120.7 dB. Birinci sayi olculebilir bantlari "olculemez"
+diye isaretliyordu.
+
+Duzeltilmis taban (FLAC 44.1 -> 48 -> 44.1, 30 s kesit):
+
+| bant | 1-4 k | 4-8 k | 8-12 k | 12-16 k | 16-18 k | 18-20 k | 20-21 k |
+|---|---|---|---|---|---|---|---|
+| taban (dB) | 149.8 | 147.6 | 145.6 | 143.9 | 135.1 | 120.7 | 112.1 |
+| plan olcumu | 148 | | | 140 | | 118 | 50 |
+
+Plandaki 20-21 kHz satiri (50 dB) yeniden uretilemedi; o olcumun yontemi
+kayitli degil. Guncel sayi tekrarlanabilir olan.
+
+## Yeniden ornekleyen zincirde bantlar soxr kesiminde biter
+
+Iki dosya farkli hizdaysa soxr `cutoff * Nyquist` ustunu tanim geregi
+gecirmez (0.99 x 22050 = 21.83 kHz). Bant duzeni Nyquist'e kadar gidiyordu ve
+gercek bir FLAC/Opus ciftinde 22.00-22.05 kHz bandini, tabani -11 dB iken,
+"olculebilir" gosterdi: `S/N < taban - 3` kurali yalnizca "S/N'e inanmak icin
+fazla yuksek" yonunu korur. Bant duzeni artik kesime kirpiliyor; yeni bir
+sayi gerekmedi, `ResampleCfg.cutoff` zaten belgelenmis.
+
+## Ilk gercek sonuc: planlama oturumunun elle analiziyle ortusuyor
+
+Loreena McKennitt, "Beneath a Phrygian Sky": FLAC 44.1/16 ile YouTube Opus
+(~141 kbps), 9.5 dk, 8.7 s'de:
+
+| | elle analiz (planlama) | boru hatti |
+|---|---|---|
+| gecikme | 0 | -0.020 ornek |
+| hizali r | ~0.998 | 0.9983 |
+| genis bant S/N | ~24 dB | duz 24.33 dB, inkoherent 25.62 dB |
+| kazanc | 0.0 dB | -0.01 dB |
+
+Side kanali mid'den belirgin kotu (4-8 kHz: 15.3 dB'e karsi 5.4 dB) --
+joint-stereo'nun beklenen izi. 20-21.83 kHz'de -10.3 dB Opus'un kendi
+kesimi; o bantta taban 91.8 dB oldugu icin zincirden gelmiyor.
