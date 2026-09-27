@@ -281,6 +281,18 @@ def build(
 
         if fine.status == "ok":
             verdict: Verdict = "aligned"
+        elif drift is not None and drift.status == "unreliable":
+            # Zarf eslesti ama dalga formu kaydin HICBIR yerinde eslesmiyor: capa
+            # yok ve hizali korelasyon dusuk. Tek kanit zarf, ve zarf yalnizca
+            # "ne zaman yuksek sesliydi"yi olcer -- ayni ses yuksekligi egrisine
+            # sahip iki farkli kayit (ayni duzenlemenin iki icrasi, ayni tremolo
+            # ile uretilmis iki gurultu) onu gecer. Ilk surum bunu "farkli master"
+            # diye etiketleyip OLCUYORDU: zarf 0.917, capa 0, r 0.024.
+            reasons.append(
+                f"envelopes match but waveforms do not (no consistent anchors, aligned "
+                f"correlation {fine.correlation:.2f}): not the same recording"
+            )
+            return result("different_recording", position_s=position_s, lag=lag, fine=fine)
         else:
             verdict = "different_master"
             reasons.append(
