@@ -31,7 +31,8 @@ from typing import Literal
 
 import numpy as np
 
-from app.align import gccphat
+from app.align import envelope, gccphat
+from app.align.thresholds import MIN_ENVELOPE_CORRELATION
 from app.dsp.transforms import ensure_signal
 
 # Bilinen hiz oranlari ve bunlara yakalanma toleransi. Olculen oran bir tablo
@@ -82,6 +83,16 @@ MIN_ANCHORS = 12
 DEFAULT_WINDOW_S = 0.25
 MAX_ANCHOR_PPM = 1000.0
 
+# Sinanan hipotezler: 1.0 (dogrudan olcum) ve tablodaki, capalarin OLCEMEYECEGI
+# kadar buyuk oranlar. 1.0001 gibi aralik icindeki bir oran 1.0 hipotezinin
+# artigindan zaten olculur; ayri bir hipotez olarak sinanirsa gurultude 1.0 ile
+# neredeyse berabere skor alir ve rastgele kazanir (olculdu: 0 dB S/N'de
+# 24 denemenin birinde 0.06 ppm "surukelenme" raporlandi).
+_HYPOTHESES: tuple[float, ...] = (
+    1.0,
+    *(value for value, _ in _SNAP_TABLE if abs(value - 1.0) * 1e6 > MAX_ANCHOR_PPM),
+)
+
 DriftStatus = Literal["none", "drift", "unreliable"]
 
 
@@ -121,12 +132,25 @@ class DriftEstimate:
 
     @property
     def is_resampling(self) -> bool:
-        """Farki codec'e degil, yeniden zamanlamaya baglamak gerekir mi?
+        """Iki dosya FARKLI bir zamanlama aktarimindan mi geliyor?
 
-        Dogruysa rapor ham S/N GOSTERMEMELIDIR: iki dosya ayni hizda olmadigi
-        surece olculen fark codec hakkinda bir sey soylemez.
+        Dogruysa rapor ham S/N GOSTERMEMELIDIR. PAL ya da NTSC donusumu sesi
+        yeniden orneklenmis (ve PAL'de perdesi kaymis) baska bir master yapar;
+        aradaki fark codec hakkinda bir sey soylemez.
+
+        Kucuk, etiketsiz saat kaymasi (birkac 10 ppm) bu sinifa GIRMEZ: icerik
+        ayni, yalnizca iki saat farkli hizda. Plan geregi global olarak yeniden
+        orneklenmez, blok-yerel gecikme takibiyle telafi edilir -- bkz.
+        `needs_tracking`.
         """
-        return self.status == "drift" and abs(self.ppm) > _NEGLIGIBLE_PPM
+        if self.status != "drift":
+            return False
+        return self.label is not None or abs(self.ppm) > MAX_ANCHOR_PPM
+
+    @property
+    def needs_tracking(self) -> bool:
+        """Karsilastirma mumkun ama gecikme kayit boyunca izlenmeli mi?"""
+        return self.status == "drift" and not self.is_resampling and abs(self.ppm) > _NEGLIGIBLE_PPM
 
 
 def collect_anchors(
@@ -137,15 +161,18 @@ def collect_anchors(
     coarse_lag_s: float = 0.0,
     count: int = 24,
     window_s: float = DEFAULT_WINDOW_S,
-    max_drift: float = 0.05,
+    max_drift: float = 2.0 * MAX_ANCHOR_PPM * 1e-6,
     min_correlation: float = 0.5,
 ) -> list[Anchor]:
     """Kayit boyunca dagitilmis noktalarda gecikme olcer.
 
-    Arama yaricapi konumla birlikte BUYUR: `max_drift` orani kadar. Sabit bir
-    yaricap PAL'i kaciririr -- %4.17, 10 dakikalik bir parcanin sonunda 25 s
-    birikir ve sabit +-2 s'lik bir pencere oraya asla ulasmaz. Varsayilan %5
-    PAL'i rahatca kapsar.
+    Arama yaricapi konumla birlikte BUYUR: `max_drift` orani kadar, cunku
+    biriken kayma konumla dogru orantilidir. Varsayilan, capalarin yakalama
+    araliginin iki kati (2000 ppm). Daha genis aramak ise yaramaz -- o
+    araligin disinda pencere ici kayma tepeyi zaten dagitiyor -- ama maliyeti
+    buyutur: %5 ile 2 saatlik bir kaydin sonunda yaricap 360 s olurdu, yani
+    her capa icin milyonlarca ornekli bir FFT. PAL gibi buyuk oranlar olculmez,
+    `estimate_from_audio` icinde sinanir.
 
     Korelasyonu `min_correlation`in altinda kalan capalar ATILIR. Sessizlige
     veya alkisa denk gelen bir pencere tamamen anlamsiz bir gecikme dondurur;
@@ -281,29 +308,23 @@ def estimate(anchors: list[Anchor], *, min_anchors: int = MIN_ANCHORS) -> DriftE
             residual_ms=residual_ms,
         )
 
+    return _classify(ratio, offset, len(anchors), residual_ms)
+
+
+def _classify(ratio: float, offset_s: float, anchors: int, residual_ms: float) -> DriftEstimate:
+    """Guvenilir bir orani tabloya yakalar ya da ihmal edilebilir sayar.
+
+    TEK yer: hem dogrudan olcum hem hipotez yolu buradan gecer. Hipotez yolu
+    once kendi siniflandirmasini yapiyordu ve "ihmal edilebilir" kuralini
+    atlayip 0.06 ppm'i "surukelenme" diye raporladi.
+    """
     snapped = snap(ratio)
     if snapped is not None:
-        ratio, label = snapped
-    else:
-        label = None
-        if abs(ratio - 1.0) * 1e6 <= _NEGLIGIBLE_PPM:
-            return DriftEstimate(
-                ratio=1.0,
-                offset_s=offset,
-                status="none",
-                label=None,
-                anchors=len(anchors),
-                residual_ms=residual_ms,
-            )
-
-    return DriftEstimate(
-        ratio=ratio,
-        offset_s=offset,
-        status="drift",
-        label=label,
-        anchors=len(anchors),
-        residual_ms=residual_ms,
-    )
+        known, label = snapped
+        return DriftEstimate(known, offset_s, "drift", label, anchors, residual_ms)
+    if abs(ratio - 1.0) * 1e6 <= _NEGLIGIBLE_PPM:
+        return DriftEstimate(1.0, offset_s, "none", None, anchors, residual_ms)
+    return DriftEstimate(ratio, offset_s, "drift", None, anchors, residual_ms)
 
 
 def _rescale(x: np.ndarray, ratio: float) -> np.ndarray:
@@ -328,7 +349,7 @@ def estimate_from_audio(
     test: np.ndarray,
     sample_rate: int,
     *,
-    coarse_lag_s: float = 0.0,
+    coarse_lag_s: float | None = None,
     count: int = 30,
     window_s: float = DEFAULT_WINDOW_S,
     min_correlation: float = 0.3,
@@ -344,15 +365,37 @@ def estimate_from_audio(
 
     Kazanan hipotezin uzerinde kalan artik oran normal yoldan olculur ve nihai
     oran ikisinin carpimidir.
+
+    `coarse_lag_s` verilmezse her hipotez KENDI kaba gecikmesini telafi
+    edilmis zarftan bulur. Tek bir disaridan verilen gecikme PAL'de tanimsizdir:
+    gecikme kayit boyunca %4 degisir, zarf eslestirmesi ortalama bir yer secer
+    ve 60 s'lik bir dosyada bile kaydin basinda 1 s'den fazla sapar.
     """
+    reference_envelope = (
+        envelope.from_samples(reference, sample_rate, keep_samples=False)
+        if coarse_lag_s is None
+        else None
+    )
     best: tuple[float, float, DriftEstimate] | None = None
-    for candidate in (1.0, *(value for value, _ in _SNAP_TABLE)):
+    for candidate in _HYPOTHESES:
         compensated = _rescale(test, 1.0 / candidate)
+        lag_s = coarse_lag_s
+        if reference_envelope is not None:
+            match = envelope.coarse_match(
+                reference_envelope,
+                envelope.from_samples(compensated, sample_rate, keep_samples=False),
+            )
+            # Zarf bilgisizse (dinamigi duz icerik) gecikmesine guvenilmez ve
+            # sifira dusulur -- ama hipotez ELENMEZ. Ilk surum burada eliyordu
+            # ve duragan icerikte DOGRU hipotezi de atip "bilmiyorum" diyordu
+            # (50 ppm ve NTSC, capalar tek basina kusursuz calisirken). Karari
+            # capalar verir; zarf yalnizca nereye bakilacagini soyler.
+            lag_s = match.lag_s if match.rho >= MIN_ENVELOPE_CORRELATION else 0.0
         anchors = collect_anchors(
             reference,
             compensated,
             sample_rate,
-            coarse_lag_s=coarse_lag_s,
+            coarse_lag_s=lag_s if lag_s is not None else 0.0,
             count=count,
             window_s=window_s,
             min_correlation=min_correlation,
@@ -375,18 +418,16 @@ def estimate_from_audio(
         )
 
     candidate, _, residual = best
-    if candidate == 1.0:
-        return residual
-    # Hipotez ve uzerindeki artik birlesir. Artik guvenilir degilse hipotezin
-    # kendisi yine de raporlanir; PAL'in varligi artigin kalitesinden bagimsiz.
-    combined = candidate * (residual.ratio if residual.status != "unreliable" else 1.0)
-    snapped = snap(combined)
-    ratio, label = snapped if snapped is not None else (combined, None)
+    if candidate == 1.0 or residual.status == "unreliable":
+        # Hipotezin artigi tutarsizsa hipotezin kendisi de kanitlanmis degil;
+        # "PAL" demek icin capalarin telafi sonrasi bir dogru olusturmasi sart.
+        return residual if candidate == 1.0 else _unreliable(residual)
+    return _classify(
+        candidate * residual.ratio, residual.offset_s, residual.anchors, residual.residual_ms
+    )
+
+
+def _unreliable(residual: DriftEstimate) -> DriftEstimate:
     return DriftEstimate(
-        ratio=ratio,
-        offset_s=residual.offset_s,
-        status="drift",
-        label=label,
-        anchors=residual.anchors,
-        residual_ms=residual.residual_ms,
+        1.0, residual.offset_s, "unreliable", None, residual.anchors, residual.residual_ms
     )

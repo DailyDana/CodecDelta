@@ -323,3 +323,23 @@ def test_estimate_from_audio_gives_up_on_unrelated_audio() -> None:
     result = drift.estimate_from_audio(music_like(120.0, seed=20), music_like(120.0, seed=21), RATE)
     assert result.status == "unreliable"
     assert not result.is_resampling
+
+
+@pytest.mark.parametrize("ratio", [1.0, 25.0 / 24.0])
+def test_estimate_from_audio_finds_its_own_coarse_offset(ratio: float) -> None:
+    """Buyuk bir baslangic kaymasi + PAL, disaridan gecikme verilmeden.
+
+    Capa arama yaricapi 0.25 s; 3.7 s'lik kaymayi ancak zarf bulabilir. PAL'de
+    tek bir disaridan verilen gecikme zaten tanimsiz, o yuzden her hipotez
+    kendi telafi edilmis zarfindan bakiyor. Zarfin tutunabilmesi icin
+    dinamigi olan bir sinyal kullaniliyor.
+    """
+    from tests.test_envelope import dynamic_noise
+
+    source = dynamic_noise(200.0, seed=31)
+    offset = int(3.7 * RATE)
+    test = resample(np.concatenate([np.zeros(offset), source]), ratio)
+
+    result = drift.estimate_from_audio(source, test, RATE)
+    assert result.ratio == pytest.approx(ratio, abs=2e-6)
+    assert result.offset_s == pytest.approx(3.7, abs=2e-3)
