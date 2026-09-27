@@ -66,8 +66,18 @@ class ResampleCfg:
     cutoff: float = 0.99
 
     def filter_expr(self, rate: int) -> str:
+        """Filtre zinciri parcasi. Basindaki `aformat` ZORUNLU, kaldirmayin.
+
+        ffmpeg filtreler arasi ornek formatini kendisi pazarlik eder ve 16-bit
+        bir kaynakta iki `aresample` arasindaki baglanti s16'da kalabiliyor:
+        sinyal ara adimda yeniden 16 bite yuvarlaniyor. OLCULEN (FLAC s16,
+        44.1->48->44.1, 1-4 kHz inkoherent S/N): formatsiz 81.1 dB, `aformat`
+        ile 148.4 dB. Tek yonlu donusum bu build'de etkilenmiyor (cikis f32le
+        istedigi icin), ama davranisi pazarliga birakmak bir sonraki filtre
+        eklendiginde sessizce bozulmak demek.
+        """
         return (
-            f"aresample={rate}:resampler={self.engine}"
+            f"aformat=sample_fmts=dbl,aresample={rate}:resampler={self.engine}"
             f":precision={self.precision}:cutoff={self.cutoff}"
         )
 
