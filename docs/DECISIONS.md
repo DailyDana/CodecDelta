@@ -454,3 +454,27 @@ farkli bir fazdan baslar. 13.3712 s'den okuma r = 0.9796 verdi. Okuyucu arama
 noktasini izgaraya yuvarlar ve farki kirpar. Sozlesme testi 7 format x 2 hiz
 x izgara ici/disi baslangiclarda `np.array_equal` istiyor; izgara kurali
 kapatildiginda yeniden ornekleyen hizli yol testleri dusuyor (dogrulandi).
+
+## Spektrumda kesirli gecikme: taban -67 dB
+
+Blok-yerel gecikme takibi kesirli gecikmeyi STFT cercevelerine faz rampasi
+olarak uygular (`stft.phase_shift`). Bu yaklasiktir -- pencere kaymaz, yalnizca
+icerik kayar -- ve hatasi bir olcum tabani olusturur. Ilk yazdigim docstring
+"ihmal edilebilir" diyordu; olcum bunu yalanladi. OLCULEN (4096'lik cerceve,
+gercek kesirli kaydirilmis sinyalin STFT'sine gore):
+
+| bant (Nyquist orani) | 0.25 ornek | 0.5 ornek |
+|---|---|---|
+| 0 .. 0.99 | -73 dB | -67 dB |
+| 0.99 .. 1.0 (Nyquist haric) | -23.5 dB | -20.5 dB |
+| son 4 bin (Nyquist haric) | -16.2 dB | -13.2 dB |
+| Nyquist bini | -0.1 dB | +2.9 dB |
+| beyaz gurultu, tum bant | -32 dB | -29 dB |
+
+Beyaz gurultude tum bant hatasi (-29 dB) codec gurultusu gibi gorunecek kadar
+buyuk, ama tamamini en ust birkac bin belirliyor; orada kesirli kayma
+tanimsiz (gercek bir sinyalin Nyquist bileseni gercek olmali). Gercek ses bu
+bantta enerji tasimaz ve bant zaten yeniden orneklemenin tabani yuzunden
+"olculemez". Asil sonuc: kesirli gecikme telafi edildiginde ~64 dB ustundeki
+S/N olculemez. Kalibrasyon referansi ayni yoldan gecirdigi icin bu taban
+raporda satir satir gorunecek.
