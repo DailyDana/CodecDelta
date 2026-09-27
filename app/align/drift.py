@@ -1,0 +1,392 @@
+"""Hiz orani ve surukelenme tespiti -- hizalamanin ucuncu sorusu.
+
+Iki kayit ayni anda baslasa bile ayni HIZDA gitmeyebilir. Uc ayri sebep:
+
+1. **PAL hizlandirmasi (%4.17).** Sinema filmi 24 fps'tir, PAL televizyon
+   25 fps. Aktarim sirasinda film cogu zaman yeniden zamanlanmaz, sadece daha
+   hizli oynatilir; ses de onunla birlikte %4.17 hizlanir ve perde bir yarim
+   tona yakin yukselir. Bir filmin PAL DVD'sinden alinan ses ile ayni filmin
+   Blu-ray'inden alinan ses arasindaki fark budur, codec farki degil.
+2. **Saat surukelenmesi.** Farkli donanimla yapilmis iki kayit, nominal olarak
+   ayni orneklemede calissa bile kristal toleransi kadar (tipik olarak birkac
+   10 ppm) kayar. 2 saatlik bir kayitta 50 ppm, 360 ms eder.
+3. **Kasitli zamanlama.** 30/29.97 (NTSC pulldown) ve 1.0001 gibi oranlar.
+
+Neden onemli: oran 1'den farkliysa fark ARTIK codec farki degildir. Olculen
+S/N'nin buyuk kismi zaman kaymasindan gelir ve rapor bunu soylemeden sayi
+gostermemelidir.
+
+Yontem: kayit boyunca dagitilmis capalarda tam sayi gecikme olculur, sonra
+gecikme-zaman dogrusuna **Theil-Sen** ile egim gecirilir. En kucuk kareler
+degil: capalarin bir kismi sessizlige, alkisa ya da bir dropout'a denk gelir ve
+tamamen yanlis gecikme dondurur. Theil-Sen ikili egimlerin medyanini aldigi
+icin capalarin %29'u bozuk olsa bile dogru kalir; tek bir uc deger en kucuk
+kareler egimini tamamen cevirir.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Literal
+
+import numpy as np
+
+from app.align import gccphat
+from app.dsp.transforms import ensure_signal
+
+# Bilinen hiz oranlari ve bunlara yakalanma toleransi. Olculen oran bir tablo
+# degerine bu kadar yakinsa, olculen degil TABLO degeri kullanilir: bunlar
+# tam rasyonel sayilardir ve olcum gurultusu yuzunden 1.041663 raporlamak
+# yaniltici olur.
+_SNAP_TABLE: tuple[tuple[float, str], ...] = (
+    (25.0 / 24.0, "PAL hizlandirmasi (24->25 fps)"),
+    (24.0 / 25.0, "PAL yavaslatmasi (25->24 fps)"),
+    (30.0 / 29.97, "NTSC pulldown (29.97->30 fps)"),
+    (29.97 / 30.0, "NTSC pulldown (30->29.97 fps)"),
+    (1.0001, "1.0001 zamanlama"),
+)
+# Tolerans MUTLAK degil, sapmanin oraniyla olcekli. Sabit 2e-4 olarak
+# denendi ve yanlis cikti: 1.0001 girdisinin kendi sapmasi 1e-4 oldugu icin
+# boyle bir pencere SURUKLENME OLMAYAN bir dosyayi (oran 1.0) "1.0001
+# zamanlama" diye etiketliyordu. Oransal tolerans her girdiyi kendi
+# olceginde degerlendirir.
+_SNAP_RELATIVE = 0.02
+_SNAP_FLOOR = 1e-5
+
+# Bu esigin altindaki oranlar "yok" sayilir. 5 ppm, 10 dakikalik bir parcada
+# 3 ms eder -- L3 ince hizalamanin blok-yerel takibi bunu zaten yutar ve
+# global bir yeniden orneklemeye deger bir sey degildir.
+_NEGLIGIBLE_PPM = 5.0
+
+# Theil-Sen kalintilarinin MAD'i bunu asarsa fit'e guvenilmez. 20 ms, capalarin
+# arasinda tutarli bir dogru olmadigi anlamina gelir.
+_MAX_RESIDUAL_MS = 20.0
+
+# Anlamli bir fit icin gereken en az capa. Plan 12 diyor; ikili egim medyani
+# bunun altinda tek bir bozuk capaya karsi kirilgan hale geliyor.
+MIN_ANCHORS = 12
+
+# Capa penceresinin varsayilan uzunlugu. Kisa olmasi ZORUNLU: pencere icinde
+# biriken kayma `window * (ratio - 1)` ornektir ve icerigin periyodunun yarisini
+# astiginda korelasyon coker. OLCULEN (8 kHz, 300 s, 30 capa):
+#
+#   sapma    0.25 s pencere        1.0 s          2.0 s
+#      10 ppm  0.1 ppm hata     0.1 ppm        0.0 ppm
+#     100 ppm  0.0 ppm hata     0.0 ppm        0.0 ppm
+#    1000 ppm  1.0 ppm hata     capa YOK       capa YOK
+#    5000 ppm  capa YOK         capa YOK       capa YOK
+#
+# Yani 0.25 s ile yakalama araligi ~1000 ppm. NTSC pulldown (1001 ppm) tam
+# sinirda calisir; PAL (41667 ppm) hicbir pencerede calismaz ve on telafi
+# gerektirir -- `estimate_from_audio` bunu hipotez sinamasiyla cozer.
+DEFAULT_WINDOW_S = 0.25
+MAX_ANCHOR_PPM = 1000.0
+
+DriftStatus = Literal["none", "drift", "unreliable"]
+
+
+@dataclass(frozen=True)
+class Anchor:
+    """Kaydin tek bir noktasinda olculen gecikme."""
+
+    # Capanin test icindeki merkez konumu, saniye.
+    position_s: float
+    # O noktada olculen gecikme, saniye. Pozitif = test geride.
+    lag_s: float
+    # Hizalanmis pencerelerin Pearson korelasyonu (ISARETLI).
+    correlation: float
+    psr: float
+
+
+@dataclass(frozen=True)
+class DriftEstimate:
+    """Kayit boyunca olculen hiz orani."""
+
+    # test'in reference'e gore hiz orani. 1'den buyuk = test daha HIZLI.
+    ratio: float
+    # Kaydin basindaki gecikme, saniye (Theil-Sen kesisimi).
+    offset_s: float
+    status: DriftStatus
+    # Tabloya yakalandiysa insan-okunur adi, yoksa None.
+    label: str | None
+    anchors: int
+    # Theil-Sen kalintilarinin medyan mutlak sapmasi, milisaniye. Fit'in ne
+    # kadar tutarli oldugunun olcusu.
+    residual_ms: float
+
+    @property
+    def ppm(self) -> float:
+        """Orani milyonda bir cinsinden sapma olarak verir."""
+        return (self.ratio - 1.0) * 1e6
+
+    @property
+    def is_resampling(self) -> bool:
+        """Farki codec'e degil, yeniden zamanlamaya baglamak gerekir mi?
+
+        Dogruysa rapor ham S/N GOSTERMEMELIDIR: iki dosya ayni hizda olmadigi
+        surece olculen fark codec hakkinda bir sey soylemez.
+        """
+        return self.status == "drift" and abs(self.ppm) > _NEGLIGIBLE_PPM
+
+
+def collect_anchors(
+    reference: np.ndarray,
+    test: np.ndarray,
+    sample_rate: int,
+    *,
+    coarse_lag_s: float = 0.0,
+    count: int = 24,
+    window_s: float = DEFAULT_WINDOW_S,
+    max_drift: float = 0.05,
+    min_correlation: float = 0.5,
+) -> list[Anchor]:
+    """Kayit boyunca dagitilmis noktalarda gecikme olcer.
+
+    Arama yaricapi konumla birlikte BUYUR: `max_drift` orani kadar. Sabit bir
+    yaricap PAL'i kaciririr -- %4.17, 10 dakikalik bir parcanin sonunda 25 s
+    birikir ve sabit +-2 s'lik bir pencere oraya asla ulasmaz. Varsayilan %5
+    PAL'i rahatca kapsar.
+
+    Korelasyonu `min_correlation`in altinda kalan capalar ATILIR. Sessizlige
+    veya alkisa denk gelen bir pencere tamamen anlamsiz bir gecikme dondurur;
+    Theil-Sen bunlara dayanikli olsa da, once elenmeleri fit'i belirgin
+    iyilestirir.
+    """
+    ensure_signal(reference, "reference")
+    ensure_signal(test, "test")
+    if sample_rate <= 0:
+        raise ValueError("sample_rate pozitif olmali")
+    if count < 2:
+        raise ValueError("en az iki capa gerekir")
+
+    window = int(window_s * sample_rate)
+    if window <= 0 or test.size < window or reference.size < window:
+        return []
+
+    anchors: list[Anchor] = []
+    # Capalar test'in kullanilabilir araligina esit araliklarla yayilir; bas ve
+    # son kirpilir cunku oralarda referans tarafi pencereyi tasiyamayabilir.
+    starts = np.linspace(0, test.size - window, count).astype(int)
+    for start in starts:
+        position_s = (start + window / 2) / sample_rate
+        radius_s = window_s + max_drift * position_s
+        # Referans tarafindan, kaba gecikmeye gore beklenen konumun etrafinda
+        # yaricap kadar genis bir parca al.
+        centre = start - int(coarse_lag_s * sample_rate)
+        radius = int(radius_s * sample_rate)
+        lo = max(0, centre - radius)
+        hi = min(reference.size, centre + window + radius)
+        if hi - lo < window:
+            continue
+
+        window_test = test[start : start + window]
+        estimate = gccphat.estimate(reference[lo:hi], window_test)
+        # gccphat gecikmeyi kirpilmis parcalar icinde verir; mutlak zamana cevir.
+        # test[start+t] = reference[lo+t-L] ve test[T] = reference[T-d] oldugundan
+        # start - d = lo - L, yani d = L + start - lo.
+        lag_samples = estimate.lag + start - lo
+
+        # DIKKAT: `estimate.correlation` burada KULLANILAMAZ. `gccphat` esit
+        # uzunlukta girdi varsayar; referans dilimi test penceresinden uzun
+        # oldugunda `aligned_slices` kisa olanin boyuna gore kirpar ve gercek
+        # gecikme o boyu astiginda sessizce BOS dilim dondurur -- korelasyon
+        # 0.0 olur, tepe dogru bulunmus olsa bile. Yerine dogru konumlanmis
+        # referans parcasi dogrudan eslestiriliyor.
+        offset = -estimate.lag
+        if offset < 0 or offset + window > hi - lo:
+            continue
+        correlation = gccphat.correlation_at(
+            reference[lo + offset : lo + offset + window], window_test, 0
+        )
+        if abs(correlation) < min_correlation:
+            continue
+        anchors.append(
+            Anchor(
+                position_s=position_s,
+                lag_s=lag_samples / sample_rate,
+                correlation=correlation,
+                psr=estimate.psr,
+            )
+        )
+    return anchors
+
+
+def theil_sen(x: np.ndarray, y: np.ndarray) -> tuple[float, float]:
+    """Ikili egimlerin medyani ile dogru gecirir.
+
+    Kirilma noktasi %29: capalarin bu kadari tamamen yanlis olsa bile egim
+    dogru kalir. En kucuk karelerde tek bir uc deger yeterlidir.
+
+    Kesisim, `median(y - slope * x)` ile bulunur (Siegel'in onerdigi bicim).
+    """
+    if x.size != y.size:
+        raise ValueError("x ve y ayni uzunlukta olmali")
+    if x.size < 2:
+        return 0.0, float(y[0]) if y.size else 0.0
+
+    rows, cols = np.triu_indices(x.size, k=1)
+    run = x[cols] - x[rows]
+    usable = run != 0.0
+    if not usable.any():
+        return 0.0, float(np.median(y))
+    slope = float(np.median((y[cols] - y[rows])[usable] / run[usable]))
+    return slope, float(np.median(y - slope * x))
+
+
+def snap(ratio: float) -> tuple[float, str] | None:
+    """Oran bilinen bir zamanlama oranina yakinsa onu dondurur."""
+    for known, label in _SNAP_TABLE:
+        tolerance = max(_SNAP_FLOOR, abs(known - 1.0) * _SNAP_RELATIVE)
+        if abs(ratio - known) <= tolerance:
+            return known, label
+    return None
+
+
+def estimate(anchors: list[Anchor], *, min_anchors: int = MIN_ANCHORS) -> DriftEstimate:
+    """Capalardan hiz oranini cikarir.
+
+    Gecikme, test icindeki konumun dogrusal bir fonksiyonu kabul edilir:
+
+        lag(t) = offset + slope * t
+
+    test, reference'a gore `r` kati hizliysa test'in `t` anindaki icerigi
+    reference'in `r*t` anindadir, yani `t - lag = r*t` ve `slope = 1 - r`.
+    Dolayisiyla `ratio = 1 - slope`. (Bu turetme sentetik bir testte bilinen
+    bir oran enjekte edilerek dogrulaniyor -- isaret hatasi yapmak kolay.)
+    """
+    if len(anchors) < min_anchors:
+        return DriftEstimate(
+            ratio=1.0,
+            offset_s=float(np.median([a.lag_s for a in anchors])) if anchors else 0.0,
+            status="unreliable",
+            label=None,
+            anchors=len(anchors),
+            residual_ms=float("inf"),
+        )
+
+    x = np.array([a.position_s for a in anchors], dtype=np.float64)
+    y = np.array([a.lag_s for a in anchors], dtype=np.float64)
+    slope, offset = theil_sen(x, y)
+    residual = y - (offset + slope * x)
+    residual_ms = float(np.median(np.abs(residual - np.median(residual)))) * 1000.0
+
+    ratio = 1.0 - slope
+    if residual_ms > _MAX_RESIDUAL_MS:
+        return DriftEstimate(
+            ratio=ratio,
+            offset_s=offset,
+            status="unreliable",
+            label=None,
+            anchors=len(anchors),
+            residual_ms=residual_ms,
+        )
+
+    snapped = snap(ratio)
+    if snapped is not None:
+        ratio, label = snapped
+    else:
+        label = None
+        if abs(ratio - 1.0) * 1e6 <= _NEGLIGIBLE_PPM:
+            return DriftEstimate(
+                ratio=1.0,
+                offset_s=offset,
+                status="none",
+                label=None,
+                anchors=len(anchors),
+                residual_ms=residual_ms,
+            )
+
+    return DriftEstimate(
+        ratio=ratio,
+        offset_s=offset,
+        status="drift",
+        label=label,
+        anchors=len(anchors),
+        residual_ms=residual_ms,
+    )
+
+
+def _rescale(x: np.ndarray, ratio: float) -> np.ndarray:
+    """`x`'i `ratio` kati hizli calan bir kopyaya cevirir.
+
+    Dogrusal interpolasyon yeterli: burada amac mutlak dogruluk degil, hangi
+    HIPOTEZIN digerlerinden daha iyi hizalandigini secmek. Secim goreli oldugu
+    icin interpolasyonun kendi hatasi tum adaylara ayni sekilde bulasir ve
+    sadelesir. Nihai telafi boru hattinda soxr ile yapilir.
+    """
+    if ratio == 1.0:
+        return x
+    count = int(x.size / ratio)
+    if count < 2:
+        return x[:0]
+    scaled: np.ndarray = np.interp(np.arange(count) * ratio, np.arange(x.size), x)
+    return scaled
+
+
+def estimate_from_audio(
+    reference: np.ndarray,
+    test: np.ndarray,
+    sample_rate: int,
+    *,
+    coarse_lag_s: float = 0.0,
+    count: int = 30,
+    window_s: float = DEFAULT_WINDOW_S,
+    min_correlation: float = 0.3,
+) -> DriftEstimate:
+    """Ham sesten hiz oranini cikarir; PAL'i hipotez sinamasiyla cozer.
+
+    Capalar tek baslarina yaklasik 1000 ppm'e kadar dayanir (bkz.
+    `DEFAULT_WINDOW_S`), PAL ise 41667 ppm'dir -- dogrudan olculemez. Ama PAL
+    SUREKLI bir bilinmeyen degildir: bilinen, ayrik ve kisa bir tablodan gelir.
+    O yuzden olculmez, SINANIR. Her aday oran icin test on telafi edilir ve
+    capalar yeniden toplanir; dogru hipotezde kayma ortadan kalkacagi icin hem
+    capa sayisi hem korelasyon belirgin yukselir.
+
+    Kazanan hipotezin uzerinde kalan artik oran normal yoldan olculur ve nihai
+    oran ikisinin carpimidir.
+    """
+    best: tuple[float, float, DriftEstimate] | None = None
+    for candidate in (1.0, *(value for value, _ in _SNAP_TABLE)):
+        compensated = _rescale(test, 1.0 / candidate)
+        anchors = collect_anchors(
+            reference,
+            compensated,
+            sample_rate,
+            coarse_lag_s=coarse_lag_s,
+            count=count,
+            window_s=window_s,
+            min_correlation=min_correlation,
+        )
+        if len(anchors) < MIN_ANCHORS:
+            continue
+        score = float(np.median([abs(a.correlation) for a in anchors]))
+        residual = estimate(anchors)
+        if best is None or score > best[1]:
+            best = (candidate, score, residual)
+
+    if best is None:
+        return DriftEstimate(
+            ratio=1.0,
+            offset_s=0.0,
+            status="unreliable",
+            label=None,
+            anchors=0,
+            residual_ms=float("inf"),
+        )
+
+    candidate, _, residual = best
+    if candidate == 1.0:
+        return residual
+    # Hipotez ve uzerindeki artik birlesir. Artik guvenilir degilse hipotezin
+    # kendisi yine de raporlanir; PAL'in varligi artigin kalitesinden bagimsiz.
+    combined = candidate * (residual.ratio if residual.status != "unreliable" else 1.0)
+    snapped = snap(combined)
+    ratio, label = snapped if snapped is not None else (combined, None)
+    return DriftEstimate(
+        ratio=ratio,
+        offset_s=residual.offset_s,
+        status="drift",
+        label=label,
+        anchors=residual.anchors,
+        residual_ms=residual.residual_ms,
+    )

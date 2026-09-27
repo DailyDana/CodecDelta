@@ -334,3 +334,53 @@ keskin tepesinde anlamlidir ve orada kaliyor.
 `CoarseMatch.psr` alani kaldirildi. Ayirt etmeyen bir sayiyi raporda tasimak,
 kullaniciya kanit gibi gorunen bir sey vermek olurdu. Bu, `refine`'da
 "keskinlik ayirt etmiyor" bulgusuyla ayni desen.
+
+## PAL olculmez, SINANIR
+
+Capa tabanli surukelenme olcumunun yakalama araligi fiziksel bir sinirla
+bagli: bir pencerede biriken kayma `window * (ratio - 1)` ornektir ve icerigin
+periyodunun yarisini astiginda GCC-PHAT tepesi dagilir. OLCULEN (8 kHz mono,
+300 s, 30 capa, `min_correlation=0.3`):
+
+| sapma | 0.25 s pencere | 1.0 s | 2.0 s |
+|---|---|---|---|
+| 10 ppm | 0.1 ppm hata | 0.1 ppm | 0.0 ppm |
+| 100 ppm | 0.0 ppm | 0.0 ppm | 0.0 ppm |
+| 1000 ppm | **1.0 ppm** | capa YOK | capa YOK |
+| 5000 ppm | capa YOK | capa YOK | capa YOK |
+| 41667 ppm (PAL) | capa YOK | capa YOK | capa YOK |
+
+Varsayilan pencere bu yuzden 2.0 s degil **0.25 s**. Yakalama araligi ~1000 ppm;
+NTSC pulldown (1001 ppm) tam sinirda calisir.
+
+PAL 41667 ppm'dir, yani araligin 40 kati disinda ve **dogrudan olculemez**.
+Cozum orani daha hassas olcmeye calismak degil, soruyu degistirmek: PAL surekli
+bir bilinmeyen degildir, kisa ve AYRIK bir tablodan gelir. O yuzden olculmez,
+sinanir -- her aday oran icin test on telafi edilir ve capalar yeniden
+toplanir; dogru hipotezde pencere ici kayma sifirlanir, capa sayisi ve
+korelasyon birlikte yukselir. Kazanan hipotezin uzerindeki artik oran normal
+yoldan olculur.
+
+OLCULEN (`estimate_from_audio`, 300 s): surukelenme yok, 50 ppm, NTSC, PAL
+hizlandirmasi ve PAL yavaslatmasi -- **besinde de hata 0.0 ppm**.
+
+## Snap toleransi mutlak degil, oransal
+
+Tabloya yakalanma toleransi once sabit `2e-4` idi. Yanlis: tablodaki 1.0001
+girdisinin kendi sapmasi 1e-4'tur, yani +-2e-4'luk bir pencere surukelenmesi
+OLMAYAN bir dosyayi (oran tam 1.0) "1.0001 zamanlama" diye etiketliyordu. Bir
+test bunu yakaladi. Tolerans artik sapmanin %2'si (taban 1e-5), yani her girdi
+kendi olceginde degerlendiriliyor.
+
+## PHAT sessizlikte NaN uretiyordu
+
+`phat_correlation`in bolme tabani GORELIDIR (`1e-12 * magnitude.max()`), ki bu
+sinyal olcegi degistiginde davranisin degismemesi icin dogru karar. Ama girdi
+tamamen sessizse taban da sifir olur ve bolme `0/0 = NaN` verir; NaN
+korelasyondan gecikmeye, oradan surukelenme fit'ine yayilir. `drift`in sessiz
+bir capa penceresine denk gelmesiyle gercekten gozlendi.
+
+Ayrica tumu sifir olan bir korelasyon dizisinde `argmax` ilk elemani, yani
+`-limit` gecikmesini seciyordu -- "bilgi yok" durumu icin uydurulmus ve
+tamamen yaniltici bir cevap. Ikisi de duzeltildi: sessizlikte `lag=0`,
+`correlation=0.0`.

@@ -298,3 +298,23 @@ def test_total_delay_adds_coarse_lag() -> None:
     assert est.usable
     assert est.delay == pytest.approx(0.25, abs=0.01)
     assert total == pytest.approx(7.25, abs=0.01)
+
+
+def test_phat_on_silence_returns_zeros_not_nan() -> None:
+    """Sessiz bir pencere NaN uretmemeli.
+
+    PHAT bolmesinin tabani GORELI oldugu icin, girdi tamamen sessizse taban da
+    sifir olur ve bolme 0/0 = NaN verir. NaN korelasyondan gecikmeye, oradan
+    surukelenme fit'ine yayilir. Kusur, `drift.collect_anchors` sessiz bir
+    capa penceresine denk geldiginde gercekten gozlendi.
+    """
+    silence = np.zeros(1024)
+    signal = np.random.default_rng(0).standard_normal(1024)
+
+    for a, b in ((silence, signal), (signal, silence), (silence, silence)):
+        correlation = gccphat.phat_correlation(a, b)
+        assert np.all(np.isfinite(correlation))
+        assert np.all(correlation == 0.0)
+        estimate = gccphat.estimate(a, b)
+        assert estimate.lag == 0
+        assert estimate.correlation == 0.0
