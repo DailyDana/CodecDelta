@@ -1,0 +1,2 @@
+# Windows batch dosyalari CRLF olmali; LF ile cmd etiketleri (goto) sasirabilir.
+*.bat text eol=crlf
