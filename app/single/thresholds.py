@@ -25,14 +25,16 @@ kanit sayilmaz (verdict.py).
 Siniflandirma sonucu (ayni set): gercek 21/21 kayipsizla tutarli, SIFIR yanlis
 "kayipli". Seffaf olmayan codec'ler (mp3 128/192/320, opus, vorbis, aac 128):
 168 dosyadan 163 kayipli, 0 kayipsiz, 5 belirsiz (hepsi AAC 128, PNS).
-(Esik 20.5 iken 161 / 1 / 6: kacan vorbis'in kesimi 20.63 kHz'di.) Ayrica D:/music'teki 34 tam parca: 34/34 kayipsizla tutarli.
+(Esik 20.5 iken 161 / 1 / 6: kacan vorbis'in kesimi 20.63 kHz'di.)
+Ayrica D:/music'teki 34 tam parca: 34/34 kayipsizla tutarli.
 
 Ilk kalibrasyon 24 bitlik transcode'larla yapilmisti (ffmpeg float cozumu
 FLAC'a s32 yazar) ve taban -92..-128 gorunuyordu; 16 bitte kuantalama
 gurultusu tabani -64'e cekiyor. Sahte bir FLAC hemen her zaman 16 bittir;
 esikler 16 bit tabloya gore.
 
-Dort album, uc mastering donemi; ama koyu (bant sinirli) gercek kayit ICERMIYOR: eski bir
+Dort album, uc mastering donemi; ama koyu (bant sinirli) gercek kayit
+ICERMIYOR: eski bir
 kayit dusuk kesim gosterir; onu kurtaracak olan taban ve diz karsi-kanitlari
 bu sette yalnizca sentetik olarak sinandi. AAC 256 ve MP3 V0'in bazi parcalari
 spektral olarak gercekten AYIRT EDILEMEZ; arac onlara "kayipsiz kaynakla
