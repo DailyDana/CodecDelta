@@ -1,27 +1,38 @@
 """Referanssiz dogrulama esikleri. TEK yer burasi.
 
 Her sayi `tools/calibrate_transcode.py` ciktisindan geliyor (28 Eyl 2026):
-9 gercek CD parcasi (TEK album, Loreena McKennitt "An Ancient Muse", 44.1/16,
-60 s kesitler) ve her birinden ffmpeg ile uretilmis, 16 BITE geri yazilmis
-transcode'lar. Hucreler min / medyan / max.
+21 gercek kaynak, DORT album -- Loreena McKennitt "An Ancient Muse" (CD,
+44.1/16, 9 parca), Radiohead "Amnesiac" (CD, 44.1/16, 4), Radiohead "A Moon
+Shaped Pool" (24/48, 4), Fleetwood Mac "Mirage" 2016 remaster (24/48, 4) --
+60 s kesitler ve her birinden ffmpeg ile 16 BITE geri yazilmis transcode'lar.
+Toplam 231 dosya. Hucreler min / medyan / max.
 
     sinif        kesim p50 kHz        diz dusus dB/500Hz    taban rel dB
-    real         21.2 / 21.5 / 21.5    4.6 /  7.2 / 10.2   -44.4 / -24.0 / -18.7
-    mp3_128      16.0 / 16.1 / 16.6   39.5 / 52.4 / 58.1   -84.5 / -77.7 / -64.1
-    mp3_192      16.2 / 18.4 / 18.7   20.7 / 48.8 / 55.5   -84.7 / -77.9 / -64.2
-    mp3_320      19.8 / 20.0 / 20.1   26.7 / 44.7 / 57.3   -84.9 / -78.1 / -64.4
-    opus 96-160  20.0 / 20.0 / 20.2   28.3 / 37.5 / 39.3   -85.6 / -78.3 / -64.4
-    vorbis_q5    17.1 / 18.3 / 20.1   25.2 / 37.8 / 43.8   -85.2 / -78.1 / -64.3
-    aac_128      19.8 / 19.9 / 20.0    8.6 / 18.1 / 38.5   -83.3 / -42.9 / -24.6
-    aac_256      21.2 / 21.5 / 21.5    4.6 /  7.2 / 10.2   -44.5 / -24.2 / -18.8
-    mp3_v0       16.0 / 20.0 / 21.5    6.3 /  8.8 / 14.2   -83.1 / -24.2 / -19.3
+    real         20.9 / 21.5 / 23.5    4.6 /  8.8 / 79.1   -51.9 / -34.6 / -18.7
+    mp3_128      15.4 / 16.1 / 16.8   32.2 / 52.1 / 58.1   -87.4 / -77.7 / -63.4
+    mp3_192      16.0 / 18.5 / 19.0   20.7 / 48.8 / 59.4   -87.6 / -78.2 / -64.2
+    mp3_320      19.8 / 20.1 / 20.5   26.7 / 45.9 / 60.8   -87.9 / -78.7 / -60.2
+    opus 96-160  20.0 / 20.1 / 20.5   21.8 / 36.0 / 39.3   -86.9 / -73   / -50.4
+    vorbis_q5    17.1 / 18.6 / 20.6   11.8 / 32.7 / 43.8   -87.1 / -74.2 / -40.7
+    aac_128      19.8 / 20.0 / 20.3    8.6 / 23.3 / 38.5   -86.1 / -64.1 / -24.6
+    aac_256      20.9 / 21.5 / 21.8    4.6 / 14.6 / 31.5   -67.9 / -44.5 / -18.8
+    mp3_v0       16.0 / 20.8 / 22.8    6.3 / 14.2 / 39.1   -83.1 / -51.5 / -19.3
+
+Gercek kayitta diz dususu 79 dB'e kadar cikiyor: 24/48 remaster'da 23.7 kHz'de
+(Nyquist'in %99'u) anti-alias filtresi. Bu yuzden duvar, Nyquist'e yakinsa
+kanit sayilmaz (verdict.py).
+
+Siniflandirma sonucu (ayni set): gercek 21/21 kayipsizla tutarli, SIFIR yanlis
+"kayipli". Seffaf olmayan codec'ler (mp3 128/192/320, opus, vorbis, aac 128):
+168 dosyadan 163 kayipli, 0 kayipsiz, 5 belirsiz (hepsi AAC 128, PNS).
+(Esik 20.5 iken 161 / 1 / 6: kacan vorbis'in kesimi 20.63 kHz'di.) Ayrica D:/music'teki 34 tam parca: 34/34 kayipsizla tutarli.
 
 Ilk kalibrasyon 24 bitlik transcode'larla yapilmisti (ffmpeg float cozumu
 FLAC'a s32 yazar) ve taban -92..-128 gorunuyordu; 16 bitte kuantalama
 gurultusu tabani -64'e cekiyor. Sahte bir FLAC hemen her zaman 16 bittir;
 esikler 16 bit tabloya gore.
 
-ORNEKLEM TEK MASTERING ve koyu (bant sinirli) gercek kayit ICERMIYOR: eski bir
+Dort album, uc mastering donemi; ama koyu (bant sinirli) gercek kayit ICERMIYOR: eski bir
 kayit dusuk kesim gosterir; onu kurtaracak olan taban ve diz karsi-kanitlari
 bu sette yalnizca sentetik olarak sinandi. AAC 256 ve MP3 V0'in bazi parcalari
 spektral olarak gercekten AYIRT EDILEMEZ; arac onlara "kayipsiz kaynakla
@@ -39,9 +50,12 @@ Ayirt ETMEYEN ve kullanilmayan olcumler (kayit icin):
 
 from __future__ import annotations
 
-# Cerceve kesim medyani bunun altindaysa kayipli izi. Gercek min 21.2 kHz,
-# seffaf olmayan codec max 20.2 kHz; esik aralarinda, gercek tarafa yakin.
-MAX_LOSSY_CUTOFF_HZ = 20_500.0
+# Cerceve kesim medyani bunun altindaysa kayipli izi. Gercek min 20.87 kHz,
+# seffaf olmayan codec max 20.63 kHz (vorbis): esik tam ortada ve MARJ DAR
+# (her iki yana ~120 Hz). 44.1 kHz'de codec alcak gecireni (~20.5) ile CD'nin
+# kendi anti-alias filtresi (~21) birbirine bu kadar yakin; daha fazla gercek
+# veriyle yeniden olculmeli. Tek albumlu ilk kalibrasyonda marj 1 kHz'di.
+MAX_LOSSY_CUTOFF_HZ = 20_750.0
 # ... ve Nyquist'in bu kesrinin altinda olmali (32 kHz'lik bir dosyada 15.5 kHz
 # kesim, kayip degil dosyanin dogasidir). Gercek 44.1 kHz min: 0.961.
 MAX_LOSSY_CUTOFF_NYQUIST_FRACTION = 0.95

@@ -78,29 +78,51 @@ def judge_spectral(evidence: SpectralEvidence) -> tuple[list[str], list[str], li
         cutoff < thresholds.MAX_LOSSY_CUTOFF_HZ
         and cutoff < thresholds.MAX_LOSSY_CUTOFF_NYQUIST_FRACTION * nyquist
     )
-    if low_cutoff:
-        text = f"content stops at {cutoff / 1000:.1f} kHz (Nyquist {nyquist / 1000:.1f} kHz)"
-        for known_khz, label in thresholds.KNOWN_CUTOFFS_KHZ:
-            if abs(cutoff / 1000 - known_khz) <= thresholds.CUTOFF_SNAP_KHZ:
-                text += f"; typical of {label}"
-                break
-        reasons.append(text)
-    else:
-        counter.append(f"content extends to {cutoff / 1000:.1f} kHz, near Nyquist")
-
     drop = evidence.knee_drop_db
+    knee_hz = evidence.knee_hz
     wall = not math.isnan(drop) and drop > thresholds.BRICKWALL_DROP_DB
-    if wall:
+    # Nyquist'in hemen altindaki duvar kaydin/ornekleme hizi donusumunun
+    # anti-alias filtresidir, codec degil. Olculen (D:/music): 24/48 remaster
+    # 23.7 kHz'de 60-80 dB, gercek CD 21.1-21.2 kHz'de 17-24 dB. Codec dizleri
+    # en fazla 20.9 kHz (Vorbis, 44.1'de 0.948 Nyquist).
+    wall_near_nyquist = wall and knee_hz >= thresholds.MAX_LOSSY_CUTOFF_NYQUIST_FRACTION * nyquist
+
+    if not low_cutoff:
+        # Ana kapi: icerik Nyquist'e kadar. Olculen hicbir seffaf-olmayan codec
+        # buraya ulasmadi; duvar ve taban burada yalnizca not.
+        counter.append(f"content extends to {cutoff / 1000:.1f} kHz, near Nyquist")
+        if wall:
+            notes.append(
+                f"steep filter at {knee_hz / 1000:.1f} kHz ({drop:.0f} dB within 500 Hz, "
+                f"{100 * knee_hz / nyquist:.0f}% of Nyquist): typical of the recording's "
+                "anti-alias or sample-rate conversion filter"
+            )
+        return reasons, counter, notes
+
+    text = f"content stops at {cutoff / 1000:.1f} kHz (Nyquist {nyquist / 1000:.1f} kHz)"
+    for known_khz, label in thresholds.KNOWN_CUTOFFS_KHZ:
+        if abs(cutoff / 1000 - known_khz) <= thresholds.CUTOFF_SNAP_KHZ:
+            text += f"; typical of {label}"
+            break
+    reasons.append(text)
+
+    if wall and not wall_near_nyquist:
         reasons.append(
-            f"brickwall at {evidence.knee_hz / 1000:.1f} kHz: {drop:.0f} dB drop within 500 Hz "
-            f"(natural roll-off measured at 5-10 dB)"
+            f"brickwall at {knee_hz / 1000:.1f} kHz: {drop:.0f} dB drop within 500 Hz "
+            f"(natural roll-off measured at 4-10 dB)"
         )
-    elif not math.isnan(drop) and drop < thresholds.GENTLE_KNEE_DROP_DB and low_cutoff:
+    elif wall_near_nyquist:
+        notes.append(
+            f"steep filter at {knee_hz / 1000:.1f} kHz is at {100 * knee_hz / nyquist:.0f}% of "
+            "Nyquist: an anti-alias filter, not evidence"
+        )
+    elif not math.isnan(drop) and drop < thresholds.GENTLE_KNEE_DROP_DB:
         counter.append(
-            f"the roll-off at {evidence.knee_hz / 1000:.1f} kHz is gentle "
+            f"the roll-off at {knee_hz / 1000:.1f} kHz is gentle "
             f"({drop:.0f} dB per 500 Hz), as in a naturally dark recording"
         )
 
+    codec_wall = wall and not wall_near_nyquist
     floor = evidence.floor_rel_db
     if not math.isnan(floor):
         if floor < thresholds.EMPTY_FLOOR_REL_DB:
@@ -108,14 +130,14 @@ def judge_spectral(evidence: SpectralEvidence) -> tuple[list[str], list[str], li
                 f"nothing above the knee: {floor:.0f} dB below the 1-4 kHz level "
                 f"(tape hiss or room noise would sit around -30..-45 dB)"
             )
-        elif floor > thresholds.CONTENT_FLOOR_REL_DB and not wall:
+        elif floor > thresholds.CONTENT_FLOOR_REL_DB and not codec_wall:
             counter.append(
                 f"content continues above the knee at {floor:.0f} dB relative: not a brickwall"
             )
         elif floor > thresholds.CONTENT_FLOOR_REL_DB:
-            # Duvarin ustunde "icerik": bir doga kaydinda 500 Hz'de 25+ dB dusus
-            # olmaz; oradaki seviye AAC'nin gurultu ikamesi (PNS) olabilir
-            # (olculen: ffmpeg aac 128k taban -43 dB, duvar 18-49 dB).
+            # Duvarin ustunde "icerik": bir doga kaydinda Nyquist'ten uzak
+            # 500 Hz'de 18+ dB dusus olmaz; oradaki seviye AAC'nin gurultu
+            # ikamesi (PNS) olabilir (olculen: ffmpeg aac 128k taban -43 dB).
             notes.append(
                 f"level above the wall is {floor:.0f} dB relative; AAC noise substitution "
                 "can leave synthetic noise there"
@@ -128,7 +150,12 @@ def judge_container(info: Probe, flac_info: flac_bitstream.FlacInfo | None) -> l
     notes: list[str] = []
     if flac_info is not None:
         family = flac_info.encoder_family
-        if family:
+        if flac_info.vendor_rewritten:
+            notes.append(
+                f"FLAC vendor string was rewritten by a tagging library ({flac_info.vendor}); "
+                "the encoder is unknown"
+            )
+        elif family:
             notes.append(f"FLAC encoder: {family} ({flac_info.vendor})")
         if not flac_info.stream_info.md5_present:
             notes.append("STREAMINFO carries no MD5: the encoder did not sign the PCM")
