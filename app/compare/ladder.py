@@ -20,7 +20,7 @@ dogru oldugu iddia edilmez.
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -31,6 +31,7 @@ from app.compare.pipeline import Track, compare, open_track
 from app.compare.result import ComparisonResult
 from app.core.ffmpeg_runner import CancelToken
 from app.core.ffmpeg_stream import DEFAULT_RESAMPLE, ResampleCfg
+from app.core.messages import Message
 from app.encode.jobs import EncodeJob
 from app.encode.jobs import run as run_encode
 
@@ -155,11 +156,17 @@ def build(
     resample: ResampleCfg = DEFAULT_RESAMPLE,
     keep_files: bool = False,
     cancel: CancelToken | None = None,
+    stage: Callable[[str], None] | None = None,
 ) -> tuple[Rung, ...]:
-    """Referansi her basamakta kodlar ve olcer. Dosyalar `workdir`e yazilir."""
+    """Referansi her basamakta kodlar ve olcer. Dosyalar `workdir`e yazilir.
+
+    `stage`, her basamaga baslarken "rung:<kbps>" anahtariyla cagrilir.
+    """
     extension = _EXTENSION.get(codec, "mka")
     out: list[Rung] = []
     for bitrate in rungs:
+        if stage is not None:
+            stage(f"rung:{bitrate}")
         path = workdir / f"ladder_{codec}_{bitrate}k.{extension}"
         run_encode(
             ffmpeg,
@@ -203,11 +210,20 @@ def judge(
     test_nmr = test.nmr.p95_db if test.nmr is not None else math.nan
     by_nmr = place([-r.nmr_p95_db for r in rungs], bitrates, -test_nmr)
     if math.isnan(test.headline_snr_db):
-        notes.append("headline SNR is not measurable (at or above the measurement floor)")
+        notes.append(
+            Message(
+                "ladder.unmeasurable",
+                "headline SNR is not measurable (at or above the measurement floor)",
+            )
+        )
     if not by_snr.monotonic and by_snr.position != "unknown":
-        notes.append("codec SNR is not monotonic in bitrate on this ladder")
+        notes.append(
+            Message("ladder.snr_monotonic", "codec SNR is not monotonic in bitrate on this ladder")
+        )
     if not by_nmr.monotonic and by_nmr.position != "unknown":
-        notes.append("NMR is not monotonic in bitrate on this ladder")
+        notes.append(
+            Message("ladder.nmr_monotonic", "NMR is not monotonic in bitrate on this ladder")
+        )
     return LadderVerdict(
         codec=codec, rungs=tuple(rungs), by_snr=by_snr, by_nmr=by_nmr, notes=tuple(notes)
     )

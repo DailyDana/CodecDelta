@@ -36,6 +36,7 @@ from app.align.envelope import CoarseMatch, Envelope, coarse_match
 from app.align.gccphat import LagEstimate
 from app.align.refine import SubSampleEstimate
 from app.align.thresholds import MIN_ENVELOPE_CORRELATION
+from app.core.messages import Message
 from app.dsp.transforms import db, fractional_shift, optimal_gain, to_mono
 
 # (baslangic cercevesi, cerceve sayisi) -> (cerceve, kanal) float dizisi.
@@ -220,18 +221,29 @@ def build(
     ref_samples = _samples_as_float(reference_env)
     test_samples = _samples_as_float(test_env)
     if ref_samples is None or test_samples is None:
-        reasons.append("speed ratio not measured: envelope kept no samples")
+        reasons.append(
+            Message("plan.no_samples", "speed ratio not measured: envelope kept no samples")
+        )
     else:
         drift = drift_mod.estimate_from_audio(ref_samples, test_samples, reference_env.sample_rate)
         if drift.is_resampling:
             label = drift.label or f"{drift.ppm:+.0f} ppm"
             reasons.append(
-                f"different speed ({label}, ratio {drift.ratio:.6f}); "
-                "the difference is not a codec difference"
+                Message(
+                    "plan.speed",
+                    "different speed ({label}, ratio {ratio:.6f}); "
+                    "the difference is not a codec difference",
+                    label=label,
+                    ratio=drift.ratio,
+                )
             )
             return result("speed_mismatch")
         if drift.needs_tracking:
-            reasons.append(f"clock drift {drift.ppm:+.1f} ppm; delay must be tracked")
+            reasons.append(
+                Message(
+                    "plan.drift", "clock drift {ppm:+.1f} ppm; delay must be tracked", ppm=drift.ppm
+                )
+            )
 
     anchored = drift is not None and drift.status != "unreliable"
 
@@ -239,13 +251,21 @@ def build(
     if envelope.rho < MIN_ENVELOPE_CORRELATION:
         if not anchored:
             reasons.append(
-                f"envelope correlation {envelope.rho:.2f} and no consistent anchors: "
-                "the files do not contain the same recording"
+                Message(
+                    "plan.different_recording",
+                    "envelope correlation {rho:.2f} and no consistent anchors: "
+                    "the files do not contain the same recording",
+                    rho=envelope.rho,
+                )
             )
             return result("different_recording")
         reasons.append(
-            f"envelope correlation {envelope.rho:.2f} is low but anchors agree; "
-            "envelope is uninformative for this material"
+            Message(
+                "plan.flat_envelope",
+                "envelope correlation {rho:.2f} is low but anchors agree; "
+                "envelope is uninformative for this material",
+                rho=envelope.rho,
+            )
         )
 
     # Kaba gecikme: capalar varsa onlardan (ornek hassasiyetinde ve kayda bagli),
@@ -264,7 +284,7 @@ def build(
     hi_s = min(test_env.duration_s, reference_env.duration_s + delay_guess) - search_s
     span = int((hi_s - lo_s) * sample_rate)
     if span < _MIN_WINDOW_FRAMES:
-        reasons.append("overlap too short to align")
+        reasons.append(Message("plan.short_overlap", "overlap too short to align"))
         return result("unaligned")
     frames = min(frames, span)
 
@@ -284,8 +304,12 @@ def build(
             raise ValueError("WindowReader (frames, channels) seklinde dizi dondurmeli")
         if ref_block.shape[1] != test_block.shape[1]:
             reasons.append(
-                f"channel count differs ({ref_block.shape[1]} vs {test_block.shape[1]}); "
-                "choose a downmix explicitly"
+                Message(
+                    "plan.channels",
+                    "channel count differs ({ref} vs {test}); choose a downmix explicitly",
+                    ref=ref_block.shape[1],
+                    test=test_block.shape[1],
+                )
             )
             return result("channel_mismatch")
         n = min(ref_block.shape[0], test_block.shape[0])
@@ -305,7 +329,7 @@ def build(
             break
 
     if not points:
-        reasons.append("no analysis window produced a valid alignment")
+        reasons.append(Message("plan.no_window", "no analysis window produced a valid alignment"))
         return result("unaligned")
 
     # Hukum ve kazanc ilk (izlemede: en iyi) noktadan; izleme noktalarindan
@@ -314,7 +338,11 @@ def build(
     track = tuple((pt.position_s, pt.delay) for pt in points if pt.fine.status == "ok")
     if tracking and len(track) < 2:
         reasons.append(
-            f"clock drift needs at least two aligned points to track, found {len(track)}"
+            Message(
+                "plan.track_points",
+                "clock drift needs at least two aligned points to track, found {count}",
+                count=len(track),
+            )
         )
     point = best if tracking else points[0]
     lag, fine = point.lag, point.fine
@@ -333,15 +361,23 @@ def build(
         # ile uretilmis iki gurultu) onu gecer. Ilk surum bunu "farkli master"
         # diye etiketleyip OLCUYORDU: zarf 0.917, capa 0, r 0.024.
         reasons.append(
-            f"envelopes match but waveforms do not (no consistent anchors, aligned "
-            f"correlation {fine.correlation:.2f}): not the same recording"
+            Message(
+                "plan.shared_contour",
+                "envelopes match but waveforms do not (no consistent anchors, aligned "
+                "correlation {r:.2f}): not the same recording",
+                r=fine.correlation,
+            )
         )
         return result("different_recording", position_s=point.position_s, lag=lag, fine=fine)
     else:
         verdict = "different_master"
         reasons.append(
-            f"aligned correlation {fine.correlation:.2f} is too low for a pure "
-            "time shift: different master, EQ or partial overlap"
+            Message(
+                "plan.different_master",
+                "aligned correlation {r:.2f} is too low for a pure time shift: "
+                "different master, EQ or partial overlap",
+                r=fine.correlation,
+            )
         )
     return result(
         verdict,
