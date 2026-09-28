@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codecdelta"
-version = "0.0.1"
+version = "0.1.0"
 description = "Measure and hear what a lossy encoder did to your audio"
 requires-python = ">=3.11"
 readme = "README.md"
@@ -57,6 +57,19 @@ disallow_untyped_defs = true
 # numpy disindaki bazi bagimliliklarin stub'i yok; eksik stub hata sayilmaz
 ignore_missing_imports = true
 
+# PyQt6 stub'lari hemen her getter'i `X | None` isaretler (menuBar, style,
+# horizontalHeader, mimeData...) ve bunlar kurulmus bir widget'ta None donmez.
+# Her cagriyi assert'le sarmak gurultu olurdu; yalnizca bu hata kodu, yalnizca
+# arayuz katmaninda kapali. Motor katmani tam strict kalir.
+[[tool.mypy.overrides]]
+module = "app.ui.*"
+disable_error_code = ["union-attr"]
+
+# pyqtgraph tipsiz; PlotWidget'tan turetmek "Any'den turetme" sayiliyor.
+[[tool.mypy.overrides]]
+module = "app.ui.widgets.charts"
+disallow_subclassing_any = false
+
 [[tool.mypy.overrides]]
 module = "tests.*"
 disallow_untyped_defs = false
@@ -87,6 +100,13 @@ known-first-party = ["app"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S", "PTH"]
+# Kullaniciya gorunen metin: Turkce karakterler (i/I noktasiz), tipografik
+# tire ve carpi isareti BILEREK. ASCII kurali kod ve yorumlar icin.
+"app/ui/*" = ["RUF001"]
+"tests/test_ui.py" = ["S", "PTH", "RUF001"]
+# Ceviri sozlugu ve stil sayfasi: uzun dizeler bolunmez.
+"app/ui/i18n.py" = ["E501"]
+"app/ui/theme.py" = ["E501"]
 
 [tool.ruff.format]
 quote-style = "double"

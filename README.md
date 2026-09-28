@@ -7,9 +7,9 @@ against a YouTube rip, MP3 against AAC — and reports how much information was 
 the spectrum it went, and whether it is audible. It is also meant to answer the other common
 question from a single file with no reference: *is this FLAC really lossless, or a transcode?*
 
-> **Work in progress.** The analysis engine is being built bottom-up and is not yet an
-> application. There is no user interface. See [Status](#status) for what actually runs
-> today.
+> **Early version (0.1.0).** The analysis engine is complete and a first desktop window
+> runs it; encoding, reports, blind testing and batch scanning are not built yet. See
+> [Status](#status).
 
 ## Status
 
@@ -21,9 +21,10 @@ question from a single file with no reference: *is this FLAC really lossless, or
 | coarse alignment, drift/PAL detection, "same recording?" verdict | working (engine only) |
 | single-pass comparison: per-band SNR (mid/side), linear vs codec-noise split, measured floor, clock-drift tracking | working (engine only) |
 | ERB masking model + NMR, anchor ladder verdict ("equivalent to Opus ~128 kbps"), referenceless lossy-source detection with calibrated thresholds | working (engine only) |
-| user interface, encoder panel, HTML report, ABX test, batch scan, packaging | not started |
+| desktop window: analyze tab (compare, verify, ladder), English/Turkish | working — v0.1.0 |
+| encoder panel, HTML report, ABX test, batch scan, packaging | not started |
 
-416 tests, `ruff` + `mypy --strict` clean, CI on Windows.
+428 tests, `ruff` + `mypy --strict` clean, CI on Windows.
 
 ## Why this repository might be worth reading
 
@@ -101,7 +102,8 @@ at 1242× realtime on a real 684 s YouTube m4a.
 ```
 uv venv --python 3.14 .venv
 uv pip install -r requirements-dev.txt
-.venv\Scripts\python -m pytest
+.venv\Scripts\python -m app            # open the window
+.venv\Scripts\python -m pytest         # run the tests
 ```
 
 ## ffmpeg

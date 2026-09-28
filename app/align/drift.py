@@ -33,6 +33,7 @@ import numpy as np
 
 from app.align import envelope, gccphat
 from app.align.thresholds import MIN_ENVELOPE_CORRELATION
+from app.core.messages import Message
 from app.dsp.transforms import ensure_signal
 
 # Bilinen hiz oranlari ve bunlara yakalanma toleransi. Olculen oran bir tablo
@@ -40,11 +41,11 @@ from app.dsp.transforms import ensure_signal
 # tam rasyonel sayilardir ve olcum gurultusu yuzunden 1.041663 raporlamak
 # yaniltici olur.
 _SNAP_TABLE: tuple[tuple[float, str], ...] = (
-    (25.0 / 24.0, "PAL hizlandirmasi (24->25 fps)"),
-    (24.0 / 25.0, "PAL yavaslatmasi (25->24 fps)"),
-    (30.0 / 29.97, "NTSC pulldown (29.97->30 fps)"),
-    (29.97 / 30.0, "NTSC pulldown (30->29.97 fps)"),
-    (1.0001, "1.0001 zamanlama"),
+    (25.0 / 24.0, Message("drift.pal_up", "PAL speed-up (24->25 fps)")),
+    (24.0 / 25.0, Message("drift.pal_down", "PAL slow-down (25->24 fps)")),
+    (30.0 / 29.97, Message("drift.ntsc_up", "NTSC pulldown (29.97->30 fps)")),
+    (29.97 / 30.0, Message("drift.ntsc_down", "NTSC pulldown (30->29.97 fps)")),
+    (1.0001, Message("drift.1_0001", "1.0001 timing")),
 )
 # Tolerans MUTLAK degil, sapmanin oraniyla olcekli. Sabit 2e-4 olarak
 # denendi ve yanlis cikti: 1.0001 girdisinin kendi sapmasi 1e-4 oldugu icin

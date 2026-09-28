@@ -31,6 +31,7 @@ from app.compare.result import BandResult, ComparisonResult, FileSummary, Status
 from app.compare.tracking import DelayModel
 from app.core.ffmpeg_runner import CancelToken
 from app.core.ffmpeg_stream import DEFAULT_RESAMPLE, PcmStream, ResampleCfg, open_pcm
+from app.core.messages import Message
 from app.core.probe import AudioStreamInfo, Probe, default_stream, probe
 from app.dsp import warp
 from app.dsp.accum import CrossSpectrum, hz_to_bin
@@ -61,7 +62,13 @@ NYQUIST_FRACTION = 0.99
 
 _BLOCK_FRAMES = 1 << 16
 
-ProgressFn = Callable[[float], None]
+# Asama bildirimi: kisa, sabit bir anahtar ("align", "measure", "floor").
+# Motor metin uretmez; arayuz anahtari kendi diline cevirir.
+StageFn = Callable[[str], None]
+
+
+def _noop(_: str) -> None:
+    return None
 
 
 @dataclass(frozen=True)
@@ -209,14 +216,16 @@ def compare(
     fft_size: int = DEFAULT_FFT_SIZE,
     resample: ResampleCfg = DEFAULT_RESAMPLE,
     cancel: CancelToken | None = None,
+    stage: StageFn = _noop,
 ) -> ComparisonResult:
-    """Iki izi hizalar ve farklarini olcer."""
+    """Iki izi hizalar ve farklarini olcer. `stage` asama degisimlerini bildirir."""
     ref_stream, test_stream = reference.stream, test.stream
     rate = max(ref_stream.sample_rate, test_stream.sample_rate)
     ref_source, test_source = reference.source(rate), test.source(rate)
     notes: list[str] = []
 
     # -- hizalama ----------------------------------------------------------
+    stage("align")
     with ThreadPoolExecutor(max_workers=2) as pool:
         env_futures = [
             pool.submit(envelope.build, ffmpeg, t.path, stream_index=t.stream_index, cancel=cancel)
@@ -230,12 +239,20 @@ def compare(
     if alignment.verdict not in ("aligned", "different_master"):
         return _not_measured(reference, test, alignment, rate, status="not_comparable", notes=notes)
     if alignment.verdict == "different_master":
-        notes.append("different master: the difference is not a codec difference")
+        notes.append(
+            Message(
+                "compare.different_master",
+                "different master: the difference is not a codec difference",
+            )
+        )
 
     # -- ana gecis -----------------------------------------------------------
+    stage("measure")
     model = tracking.from_plan(alignment, rate)
     if model is None:
-        notes.append("clock drift could not be tracked: too few aligned points")
+        notes.append(
+            Message("compare.untracked", "clock drift could not be tracked: too few aligned points")
+        )
         return _not_measured(reference, test, alignment, rate, status="not_measured", notes=notes)
     if model.slope:
         model = tracking.refine_model(
@@ -246,8 +263,13 @@ def compare(
             _overlap(model, ref_env.duration_s * rate, test_env.duration_s * rate),
         )
         notes.append(
-            f"clock drift tracked: {model.slope * 1e6:+.2f} ppm, "
-            f"largest deviation from the fit {model.max_residual:.3f} samples"
+            Message(
+                "compare.tracked",
+                "clock drift tracked: {ppm:+.2f} ppm, largest deviation from the fit "
+                "{residual:.3f} samples",
+                ppm=model.slope * 1e6,
+                residual=model.max_residual,
+            )
         )
     fraction = alignment.delay_samples - round(alignment.delay_samples)
     measure = _tracked_pass if model.slope else _main_pass
@@ -276,10 +298,11 @@ def compare(
         cancel=cancel,
     )
     if mid.frames < 2:
-        notes.append("overlap too short to measure")
+        notes.append(Message("compare.short_overlap", "overlap too short to measure"))
         return _not_measured(reference, test, alignment, rate, status="not_measured", notes=notes)
 
     # -- bantlar + taban -----------------------------------------------------
+    stage("floor")
     nyquist = min(ref_stream.sample_rate, test_stream.sample_rate) / 2.0
     # En ust %1 hicbir zaman raporlanmaz: kesirli gecikme orada tanimsiz
     # (olculen, bkz. `stft.phase_shift`: Nyquist bini tam kayip) ve bant

@@ -8,34 +8,36 @@ While the version is `0.x`, the API may break between minor versions.
 
 ## [Unreleased]
 
-### Added
-- Repository scaffold: MIT license, README, ruff/mypy strict/pytest configuration
-  and GitHub Actions CI on Windows, plus a test that keeps Qt out of the engine
-  layers so the analysis core stays headless-testable.
-- `core.ffmpeg_locate` — finds an ffmpeg/ffprobe pair, rejecting any directory
-  that lacks ffprobe, and caches probed capabilities per binary.
-- `core.ffmpeg_runner` — the single place subprocesses are started: never
-  `shell=True`, stderr always drained, cancellation kills the process tree.
-- `core.ffmpeg_stream` — raw PCM streaming that only ever uses `readinto`, with
-  resampling that always states its cutoff explicitly.
-- `core.probe` — ffprobe inspection that never decodes video, distinguishes the
-  audio ordinal from the container index, and resolves bitrate in three tiers
-  without ever guessing.
-- `core.stats` — closed-form ABX statistics: exact binomial, Wilson intervals,
-  power, Šidák correction and a Wald SPRT.
-- `core.settings` — defensive `%APPDATA%` preferences with clamping.
-- `core.privacy` — path and identity scrubbing so reports are shareable by
-  default, with an `audit()` backstop.
-- `bitstream.ogg` — page and packet reader with sampled CRC verification and
-  CRC-validated resync.
-- `bitstream.opus` — OpusHead, OpusTags and per-packet TOC statistics: mode,
-  bandwidth, frame duration, VBR and measured bitrate.
-- `bitstream.vorbis` — identification and comment headers, measured bitrate.
-- `bitstream.flac` — metadata blocks, compression ratio excluding embedded
-  artwork, encoder family from the vendor string, and MD5 verification.
-- `bitstream.mp3` — frame headers, Xing/Info and the LAME tag including the
-  declared lowpass cutoff.
+## [0.1.0] - 2026-09-28
 
-### Fixed
-- pytest now puts the repo root on `sys.path`, so the console script and
-  `python -m pytest` behave identically.
+First usable version: a desktop window that compares two encodes of the same
+recording, or checks a single lossless file, and explains its verdict.
+Everything in this list was measured before it was kept; the measurements and
+the heuristics that were removed are in `docs/DECISIONS.md`.
+
+### Added
+- **Analyze window** (`python -m app [reference] [test]`): drag-and-drop file
+  slots with a track picker for multi-track containers, compare and verify
+  actions that run in the background and can be cancelled, a results panel
+  with the verdict, a summary, a per-band table and chart, a noise-to-mask
+  spectrogram over time, and on-demand placement on an Opus bitrate ladder.
+  English and Turkish; engine messages are translated too.
+- **Alignment** that finds a short excerpt inside a long recording, detects
+  PAL/NTSC transfers and clock drift, handles inverted polarity and swapped
+  channels, and refuses to measure pairs that are not the same recording.
+- **Single-pass comparison** with per-band codec SNR for mid and side, a split
+  of the difference into linear (EQ, level) and codec-noise parts, and a
+  measurement floor measured on every run rather than assumed.
+- **Audibility**: an ERB masking model and noise-to-mask ratio, and a verdict
+  from an anchor ladder built from the user's own reference ("equivalent to
+  Opus at roughly 128 kbps").
+- **Referenceless verification** of lossless files, calibrated on four albums
+  and 231 files: 21/21 real sources and 34/34 full tracks judged consistent
+  with lossless, 163/168 non-transparent transcodes caught, none falsely
+  accused. The margin between the classes is narrow and documented.
+- Bitstream readers for Ogg/Opus, Vorbis, FLAC and MP3; ffmpeg discovery,
+  sample-exact streaming and window reads; ABX statistics; settings and
+  privacy scrubbing.
+
+### Changed
+- Licence is GPL-3.0-or-later (was MIT).

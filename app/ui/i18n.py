@@ -1,0 +1,256 @@
+"""Arayuz metinleri. Duz sozluk; varsayilan Ingilizce (Aniflow ile ayni desen).
+
+Qt Linguist / .ts kullanilmiyor: iki dil, birkac yuz dize, derleme adimi yok.
+Eksik bir anahtar Ingilizceye, o da yoksa anahtarin kendisine duser -- arayuz
+hicbir zaman bos etiket gostermez. Bir test iki dilin ayni anahtar kumesine
+sahip oldugunu kilitler.
+
+Bu modul Qt IMPORT ETMEZ: sunum katmani (`present.py`) ile birlikte ekransiz
+test edilir.
+"""
+
+from __future__ import annotations
+
+STRINGS: dict[str, dict[str, str]] = {
+    "en": {
+        "app.title": "CodecDelta",
+        "tab.analyze": "Analyze",
+        "slot.reference": "Reference",
+        "slot.test": "Test",
+        "slot.hint": "Drop an audio or video file here, or click to browse",
+        "slot.clear": "Clear",
+        "slot.track": "Track",
+        "slot.video": "video container: video is never decoded",
+        "action.compare": "Compare",
+        "action.verify": "Verify reference alone",
+        "action.cancel": "Cancel",
+        "action.ladder": "Place on an Opus ladder",
+        "stage.probe": "Reading file headers…",
+        "stage.align": "Aligning…",
+        "stage.measure": "Measuring the difference…",
+        "stage.floor": "Measuring the measurement floor…",
+        "stage.verify": "Analysing the spectrum…",
+        "stage.rung": "Encoding and measuring Opus {kbps} kbps…",
+        "stage.cancelled": "Cancelled.",
+        "stage.done": "Done in {seconds:.1f} s.",
+        "error.title": "Analysis failed",
+        "error.ffmpeg": "ffmpeg and ffprobe were not found. Install ffmpeg or set its folder in settings.",
+        "verdict.aligned": "Same recording, aligned",
+        "verdict.different_master": "Same recording, different master",
+        "verdict.different_recording": "Not the same recording",
+        "verdict.speed_mismatch": "Different speed (PAL/NTSC transfer)",
+        "verdict.channel_mismatch": "Channel layouts differ",
+        "verdict.unaligned": "Could not align",
+        "verdict.not_measured": "Not measured",
+        "headline.snr": "Codec SNR {snr:.1f} dB",
+        "headline.floor": "Difference is below the measurement floor",
+        "summary.status": "Verdict",
+        "summary.delay": "Delay",
+        "summary.gain": "Level",
+        "summary.polarity": "Polarity",
+        "summary.channels": "Channels",
+        "summary.drift": "Speed",
+        "summary.snr": "Codec SNR",
+        "summary.plain_snr": "Plain SNR (gain matched)",
+        "summary.nmr": "Noise-to-mask (median / 95th)",
+        "summary.nmr_frames": "Frames above masking threshold",
+        "summary.duration": "Compared",
+        "value.inverted": "inverted",
+        "value.normal": "normal",
+        "value.swapped": "left/right swapped",
+        "value.as_is": "as is",
+        "value.no_drift": "same speed",
+        "value.in_sync": "in sync (residual {samples:.2f} samples)",
+        "value.test_later": "test is {ms:.3f} ms later ({samples:.2f} samples)",
+        "value.test_earlier": "test is {ms:.3f} ms earlier ({samples:.2f} samples)",
+        "value.gain": "test is {db:+.2f} dB",
+        "value.seconds": "{seconds:.0f} s",
+        "bands.band": "Band",
+        "bands.mid": "Mid SNR",
+        "bands.side": "Side SNR",
+        "bands.linear": "EQ/level vs noise",
+        "bands.floor": "Floor",
+        "bands.unmeasurable": "unmeasurable",
+        "section.summary": "Summary",
+        "section.bands": "Per band",
+        "section.nmr": "Noise-to-mask ratio over time",
+        "section.reasons": "Evidence",
+        "section.notes": "Notes",
+        "single.consistent_lossless": "Consistent with a lossless source",
+        "single.consistent_lossy": "Consistent with a lossy source",
+        "single.undetermined": "Not enough evidence to judge",
+        "single.not_applicable": "The file is in a lossy format; nothing to verify",
+        "single.for": "for",
+        "single.against": "against",
+        "single.cutoff": "Content stops at",
+        "single.knee": "Steepest drop",
+        "single.floor": "Level above the knee",
+        "ladder.caption": "Ladder: the reference encoded at known Opus bitrates",
+        "ladder.within": "Equivalent to {codec} at roughly {kbps:.0f} kbps: less distorted than {upper} kbps, more than {lower} kbps.",
+        "ladder.above": "Less distorted than {codec} at {lower} kbps, the top of the ladder.",
+        "ladder.below": "More distorted than {codec} at {upper} kbps, the bottom of the ladder.",
+        "ladder.unknown": "The difference could not be placed on the ladder.",
+        "ladder.approximate": "The ladder is not monotonic for this track; treat this as approximate.",
+        "ladder.nmr_disagrees": "By masking (NMR) instead: {text}",
+        "disclaimer.audibility": "Measured difference is not audibility. Verify with a blind test.",
+    },
+    "tr": {
+        "app.title": "CodecDelta",
+        "tab.analyze": "Analiz",
+        "slot.reference": "Referans",
+        "slot.test": "Test",
+        "slot.hint": "Bir ses ya da video dosyasını buraya bırakın veya seçmek için tıklayın",
+        "slot.clear": "Temizle",
+        "slot.track": "İz",
+        "slot.video": "video kabı: video hiçbir zaman çözülmez",
+        "action.compare": "Karşılaştır",
+        "action.verify": "Referansı tek başına doğrula",
+        "action.cancel": "İptal",
+        "action.ladder": "Opus merdiveninde konumlandır",
+        "stage.probe": "Dosya başlıkları okunuyor…",
+        "stage.align": "Hizalanıyor…",
+        "stage.measure": "Fark ölçülüyor…",
+        "stage.floor": "Ölçüm tabanı ölçülüyor…",
+        "stage.verify": "Spektrum inceleniyor…",
+        "stage.rung": "Opus {kbps} kbps kodlanıp ölçülüyor…",
+        "stage.cancelled": "İptal edildi.",
+        "stage.done": "{seconds:.1f} s'de tamamlandı.",
+        "error.title": "Analiz başarısız",
+        "error.ffmpeg": "ffmpeg ve ffprobe bulunamadı. ffmpeg'i kurun ya da klasörünü ayarlardan gösterin.",
+        "verdict.aligned": "Aynı kayıt, hizalandı",
+        "verdict.different_master": "Aynı kayıt, farklı master",
+        "verdict.different_recording": "Aynı kayıt değil",
+        "verdict.speed_mismatch": "Farklı hız (PAL/NTSC aktarımı)",
+        "verdict.channel_mismatch": "Kanal düzenleri farklı",
+        "verdict.unaligned": "Hizalanamadı",
+        "verdict.not_measured": "Ölçülmedi",
+        "headline.snr": "Codec S/N {snr:.1f} dB",
+        "headline.floor": "Fark ölçüm tabanının altında",
+        "summary.status": "Hüküm",
+        "summary.delay": "Gecikme",
+        "summary.gain": "Seviye",
+        "summary.polarity": "Polarite",
+        "summary.channels": "Kanallar",
+        "summary.drift": "Hız",
+        "summary.snr": "Codec S/N",
+        "summary.plain_snr": "Düz S/N (kazanç eşitlenmiş)",
+        "summary.nmr": "Gürültü/maske (medyan / %95)",
+        "summary.nmr_frames": "Maskeleme eşiğini aşan çerçeve",
+        "summary.duration": "Karşılaştırılan",
+        "value.inverted": "ters",
+        "value.normal": "normal",
+        "value.swapped": "sol/sağ takaslı",
+        "value.as_is": "olduğu gibi",
+        "value.no_drift": "aynı hız",
+        "value.in_sync": "senkron (kalan {samples:.2f} örnek)",
+        "value.test_later": "test {ms:.3f} ms geride ({samples:.2f} örnek)",
+        "value.test_earlier": "test {ms:.3f} ms önde ({samples:.2f} örnek)",
+        "value.gain": "test {db:+.2f} dB",
+        "value.seconds": "{seconds:.0f} s",
+        "bands.band": "Bant",
+        "bands.mid": "Mid S/N",
+        "bands.side": "Side S/N",
+        "bands.linear": "EQ/seviye / gürültü",
+        "bands.floor": "Taban",
+        "bands.unmeasurable": "ölçülemez",
+        "section.summary": "Özet",
+        "section.bands": "Bant bant",
+        "section.nmr": "Zaman içinde gürültü/maske oranı",
+        "section.reasons": "Kanıtlar",
+        "section.notes": "Notlar",
+        "single.consistent_lossless": "Kayıpsız kaynakla tutarlı",
+        "single.consistent_lossy": "Kayıplı kaynakla tutarlı",
+        "single.undetermined": "Karar için yeterli kanıt yok",
+        "single.not_applicable": "Dosya zaten kayıplı bir formatta; doğrulanacak bir şey yok",
+        "single.for": "lehine",
+        "single.against": "aleyhine",
+        "single.cutoff": "İçeriğin bittiği yer",
+        "single.knee": "En dik düşüş",
+        "single.floor": "Dizin üstündeki seviye",
+        "ladder.caption": "Merdiven: referansın bilinen Opus bitrate'lerindeki kodlamaları",
+        "ladder.within": "{codec} ~{kbps:.0f} kbps kodlamasına denk: {upper} kbps'ten daha az, {lower} kbps'ten daha çok bozulmuş.",
+        "ladder.above": "{codec} {lower} kbps'ten, merdivenin tepesinden daha az bozulmuş.",
+        "ladder.below": "{codec} {upper} kbps'ten, merdivenin dibinden daha çok bozulmuş.",
+        "ladder.unknown": "Fark merdivende konumlandırılamadı.",
+        "ladder.approximate": "Bu parçada merdiven monoton değil; sonucu yaklaşık kabul edin.",
+        "ladder.nmr_disagrees": "Maskelemeye (NMR) göre ise: {text}",
+        "disclaimer.audibility": "Ölçülen fark duyulabilirlik değildir. Kör testle doğrulayın.",
+        "msg.drift.pal_up": "PAL hızlandırması (24->25 fps)",
+        "msg.drift.pal_down": "PAL yavaşlatması (25->24 fps)",
+        "msg.drift.ntsc_up": "NTSC pulldown (29.97->30 fps)",
+        "msg.drift.ntsc_down": "NTSC pulldown (30->29.97 fps)",
+        "msg.drift.1_0001": "1.0001 zamanlaması",
+        "msg.single.few_frames": "yalnızca {frames} sessiz olmayan çerçeve var; karar için çok az",
+        "msg.single.full_band": "içerik {khz:.1f} kHz'e, Nyquist'e yakın bir noktaya kadar uzanıyor",
+        "msg.single.antialias_note": "{khz:.1f} kHz'de dik filtre (500 Hz'de {drop:.0f} dB, Nyquist'in %{pct:.0f}'i): kaydın kendi anti-alias ya da örnekleme hızı dönüştürme filtresine özgü",
+        "msg.single.cutoff": "içerik {khz:.1f} kHz'de bitiyor (Nyquist {nyq:.1f} kHz)",
+        "msg.single.cutoff_typical": "içerik {khz:.1f} kHz'de bitiyor (Nyquist {nyq:.1f} kHz); {label} için tipik",
+        "msg.single.brickwall": "{khz:.1f} kHz'de duvar: 500 Hz içinde {drop:.0f} dB düşüş (doğal roll-off 4-10 dB ölçüldü)",
+        "msg.single.antialias_low": "{khz:.1f} kHz'deki dik filtre Nyquist'in %{pct:.0f}'inde: anti-alias filtresi, kanıt değil",
+        "msg.single.gentle": "{khz:.1f} kHz'deki düşüş yumuşak (500 Hz'de {drop:.0f} dB), doğal olarak koyu bir kayıttaki gibi",
+        "msg.single.empty_floor": "dizin üstünde hiçbir şey yok: 1-4 kHz seviyesinin {floor:.0f} dB altında (bant hışırtısı ya da oda gürültüsü -30..-45 dB civarında olurdu)",
+        "msg.single.content_floor": "dizin üstünde içerik devam ediyor ({floor:.0f} dB, göreli): duvar değil",
+        "msg.single.pns": "duvarın üstündeki seviye {floor:.0f} dB (göreli); AAC gürültü ikamesi orada sentetik gürültü bırakabilir",
+        "msg.single.vendor_rewritten": "FLAC vendor alanı bir etiketleme kütüphanesi tarafından yeniden yazılmış ({vendor}); kodlayıcı bilinmiyor",
+        "msg.single.encoder": "FLAC kodlayıcı: {family} ({vendor})",
+        "msg.single.no_md5": "STREAMINFO'da MD5 yok: kodlayıcı PCM'i imzalamamış",
+        "msg.single.blocksize": "olağandışı FLAC blok boyu {blocksize}: ffmpeg'in küçük paketli bir çözücüden doğrudan kodlamasıyla tutarlı (sıkıştırma oranı anlamlı değil)",
+        "msg.single.ratio": "FLAC sıkıştırma oranı {ratio:.2f}",
+        "msg.plan.no_samples": "hız oranı ölçülmedi: zarf örnek tutmadı",
+        "msg.plan.speed": "farklı hız ({label}, oran {ratio:.6f}); fark bir codec farkı değil",
+        "msg.plan.drift": "saat kayması {ppm:+.1f} ppm; gecikme izlenmeli",
+        "msg.plan.different_recording": "zarf korelasyonu {rho:.2f} ve tutarlı çapa yok: dosyalar aynı kaydı içermiyor",
+        "msg.plan.flat_envelope": "zarf korelasyonu {rho:.2f} düşük ama çapalar uyuşuyor; bu materyalde zarf bilgi taşımıyor",
+        "msg.plan.short_overlap": "hizalamak için örtüşme çok kısa",
+        "msg.plan.channels": "kanal sayısı farklı ({ref} / {test}); downmix'i açıkça seçin",
+        "msg.plan.no_window": "hiçbir analiz penceresi geçerli bir hizalama üretmedi",
+        "msg.plan.track_points": "saat kaymasını izlemek için en az iki hizalı nokta gerekir, {count} bulundu",
+        "msg.plan.shared_contour": "zarflar eşleşiyor ama dalga formları eşleşmiyor (tutarlı çapa yok, hizalı korelasyon {r:.2f}): aynı kayıt değil",
+        "msg.plan.different_master": "hizalı korelasyon {r:.2f}, saf bir zaman kayması için çok düşük: farklı master, EQ ya da kısmi örtüşme",
+        "msg.compare.different_master": "farklı master: fark bir codec farkı değil",
+        "msg.compare.untracked": "saat kayması izlenemedi: hizalı nokta çok az",
+        "msg.compare.tracked": "saat kayması izlendi: {ppm:+.2f} ppm, doğrudan en büyük sapma {residual:.3f} örnek",
+        "msg.compare.short_overlap": "ölçmek için örtüşme çok kısa",
+        "msg.ladder.unmeasurable": "manşet S/N ölçülemiyor (ölçüm tabanında ya da üstünde)",
+        "msg.ladder.snr_monotonic": "bu merdivende codec S/N bitrate ile monoton değil",
+        "msg.ladder.nmr_monotonic": "bu merdivende NMR bitrate ile monoton değil",
+    },
+}
+
+LANGUAGES = tuple(STRINGS)
+_current = "en"
+
+
+def set_language(code: str) -> None:
+    global _current
+    _current = code if code in STRINGS else "en"
+
+
+def language() -> str:
+    return _current
+
+
+def localize(text: str) -> str:
+    """Motor mesajini gecerli dile cevirir.
+
+    `app.core.messages.Message` ise ve gecerli dilde `msg.<key>` varsa ceviri,
+    yoksa metnin kendisi (Ingilizce). Duz dizeler oldugu gibi doner.
+    """
+    key = getattr(text, "key", None)
+    if key is None:
+        return str(text)
+    template = STRINGS[_current].get(f"msg.{key}")
+    if template is None:
+        return str(text)
+    # Parametrenin kendisi de bir mesaj olabilir (hiz etiketi gibi); o da cevrilir.
+    params = {
+        name: localize(value) if hasattr(value, "key") else value
+        for name, value in getattr(text, "params", {}).items()
+    }
+    return template.format(**params)
+
+
+def tr(key: str, **values: object) -> str:
+    """Anahtarin metni; `values` ile bicimlendirilir."""
+    text = STRINGS[_current].get(key) or STRINGS["en"].get(key) or key
+    return text.format(**values) if values else text

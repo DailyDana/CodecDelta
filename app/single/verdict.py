@@ -26,6 +26,7 @@ from typing import Literal
 
 from app.bitstream import flac as flac_bitstream
 from app.core.ffmpeg_runner import CancelToken
+from app.core.messages import Message
 from app.core.probe import Probe
 from app.single import spectral, thresholds
 from app.single.spectral import SpectralEvidence
@@ -69,7 +70,13 @@ def judge_spectral(evidence: SpectralEvidence) -> tuple[list[str], list[str], li
     counter: list[str] = []
     notes: list[str] = []
     if evidence.frames < thresholds.MIN_ACTIVE_FRAMES:
-        notes.append(f"only {evidence.frames} non-silent frames; too little to judge")
+        notes.append(
+            Message(
+                "single.few_frames",
+                "only {frames} non-silent frames; too little to judge",
+                frames=evidence.frames,
+            )
+        )
         return reasons, counter, notes
 
     nyquist = evidence.nyquist_hz
@@ -90,36 +97,84 @@ def judge_spectral(evidence: SpectralEvidence) -> tuple[list[str], list[str], li
     if not low_cutoff:
         # Ana kapi: icerik Nyquist'e kadar. Olculen hicbir seffaf-olmayan codec
         # buraya ulasmadi; duvar ve taban burada yalnizca not.
-        counter.append(f"content extends to {cutoff / 1000:.1f} kHz, near Nyquist")
+        counter.append(
+            Message(
+                "single.full_band",
+                "content extends to {khz:.1f} kHz, near Nyquist",
+                khz=cutoff / 1000,
+            )
+        )
         if wall:
             notes.append(
-                f"steep filter at {knee_hz / 1000:.1f} kHz ({drop:.0f} dB within 500 Hz, "
-                f"{100 * knee_hz / nyquist:.0f}% of Nyquist): typical of the recording's "
-                "anti-alias or sample-rate conversion filter"
+                Message(
+                    "single.antialias_note",
+                    "steep filter at {khz:.1f} kHz ({drop:.0f} dB within 500 Hz, {pct:.0f}% of "
+                    "Nyquist): typical of the recording's anti-alias or sample-rate "
+                    "conversion filter",
+                    khz=knee_hz / 1000,
+                    drop=drop,
+                    pct=100 * knee_hz / nyquist,
+                )
             )
         return reasons, counter, notes
 
-    text = f"content stops at {cutoff / 1000:.1f} kHz (Nyquist {nyquist / 1000:.1f} kHz)"
-    for known_khz, label in thresholds.KNOWN_CUTOFFS_KHZ:
-        if abs(cutoff / 1000 - known_khz) <= thresholds.CUTOFF_SNAP_KHZ:
-            text += f"; typical of {label}"
-            break
-    reasons.append(text)
+    typical = next(
+        (
+            label
+            for known_khz, label in thresholds.KNOWN_CUTOFFS_KHZ
+            if abs(cutoff / 1000 - known_khz) <= thresholds.CUTOFF_SNAP_KHZ
+        ),
+        None,
+    )
+    if typical is None:
+        reasons.append(
+            Message(
+                "single.cutoff",
+                "content stops at {khz:.1f} kHz (Nyquist {nyq:.1f} kHz)",
+                khz=cutoff / 1000,
+                nyq=nyquist / 1000,
+            )
+        )
+    else:
+        reasons.append(
+            Message(
+                "single.cutoff_typical",
+                "content stops at {khz:.1f} kHz (Nyquist {nyq:.1f} kHz); typical of {label}",
+                khz=cutoff / 1000,
+                nyq=nyquist / 1000,
+                label=typical,
+            )
+        )
 
     if wall and not wall_near_nyquist:
         reasons.append(
-            f"brickwall at {knee_hz / 1000:.1f} kHz: {drop:.0f} dB drop within 500 Hz "
-            f"(natural roll-off measured at 4-10 dB)"
+            Message(
+                "single.brickwall",
+                "brickwall at {khz:.1f} kHz: {drop:.0f} dB drop within 500 Hz "
+                "(natural roll-off measured at 4-10 dB)",
+                khz=knee_hz / 1000,
+                drop=drop,
+            )
         )
     elif wall_near_nyquist:
         notes.append(
-            f"steep filter at {knee_hz / 1000:.1f} kHz is at {100 * knee_hz / nyquist:.0f}% of "
-            "Nyquist: an anti-alias filter, not evidence"
+            Message(
+                "single.antialias_low",
+                "steep filter at {khz:.1f} kHz is at {pct:.0f}% of Nyquist: an anti-alias "
+                "filter, not evidence",
+                khz=knee_hz / 1000,
+                pct=100 * knee_hz / nyquist,
+            )
         )
     elif not math.isnan(drop) and drop < thresholds.GENTLE_KNEE_DROP_DB:
         counter.append(
-            f"the roll-off at {knee_hz / 1000:.1f} kHz is gentle "
-            f"({drop:.0f} dB per 500 Hz), as in a naturally dark recording"
+            Message(
+                "single.gentle",
+                "the roll-off at {khz:.1f} kHz is gentle ({drop:.0f} dB per 500 Hz), "
+                "as in a naturally dark recording",
+                khz=knee_hz / 1000,
+                drop=drop,
+            )
         )
 
     codec_wall = wall and not wall_near_nyquist
@@ -127,20 +182,32 @@ def judge_spectral(evidence: SpectralEvidence) -> tuple[list[str], list[str], li
     if not math.isnan(floor):
         if floor < thresholds.EMPTY_FLOOR_REL_DB:
             reasons.append(
-                f"nothing above the knee: {floor:.0f} dB below the 1-4 kHz level "
-                f"(tape hiss or room noise would sit around -30..-45 dB)"
+                Message(
+                    "single.empty_floor",
+                    "nothing above the knee: {floor:.0f} dB below the 1-4 kHz level "
+                    "(tape hiss or room noise would sit around -30..-45 dB)",
+                    floor=floor,
+                )
             )
         elif floor > thresholds.CONTENT_FLOOR_REL_DB and not codec_wall:
             counter.append(
-                f"content continues above the knee at {floor:.0f} dB relative: not a brickwall"
+                Message(
+                    "single.content_floor",
+                    "content continues above the knee at {floor:.0f} dB relative: not a brickwall",
+                    floor=floor,
+                )
             )
         elif floor > thresholds.CONTENT_FLOOR_REL_DB:
             # Duvarin ustunde "icerik": bir doga kaydinda Nyquist'ten uzak
             # 500 Hz'de 18+ dB dusus olmaz; oradaki seviye AAC'nin gurultu
             # ikamesi (PNS) olabilir (olculen: ffmpeg aac 128k taban -43 dB).
             notes.append(
-                f"level above the wall is {floor:.0f} dB relative; AAC noise substitution "
-                "can leave synthetic noise there"
+                Message(
+                    "single.pns",
+                    "level above the wall is {floor:.0f} dB relative; AAC noise substitution "
+                    "can leave synthetic noise there",
+                    floor=floor,
+                )
             )
     return reasons, counter, notes
 
@@ -152,13 +219,28 @@ def judge_container(info: Probe, flac_info: flac_bitstream.FlacInfo | None) -> l
         family = flac_info.encoder_family
         if flac_info.vendor_rewritten:
             notes.append(
-                f"FLAC vendor string was rewritten by a tagging library ({flac_info.vendor}); "
-                "the encoder is unknown"
+                Message(
+                    "single.vendor_rewritten",
+                    "FLAC vendor string was rewritten by a tagging library ({vendor}); "
+                    "the encoder is unknown",
+                    vendor=flac_info.vendor,
+                )
             )
         elif family:
-            notes.append(f"FLAC encoder: {family} ({flac_info.vendor})")
+            notes.append(
+                Message(
+                    "single.encoder",
+                    "FLAC encoder: {family} ({vendor})",
+                    family=family,
+                    vendor=flac_info.vendor,
+                )
+            )
         if not flac_info.stream_info.md5_present:
-            notes.append("STREAMINFO carries no MD5: the encoder did not sign the PCM")
+            notes.append(
+                Message(
+                    "single.no_md5", "STREAMINFO carries no MD5: the encoder did not sign the PCM"
+                )
+            )
         ratio = flac_info.compression_ratio
         blocksize = flac_info.stream_info.max_blocksize
         if blocksize and blocksize < _UNUSUAL_BLOCKSIZE:
@@ -168,11 +250,15 @@ def judge_container(info: Probe, flac_info: flac_bitstream.FlacInfo | None) -> l
             # 47'lik blok uretmez. Hukme GIRMEZ: blok boyu kodlayiciyi belirlemez
             # (DECISIONS), ama bu kadar kucugu bir kodlama yolunun izidir.
             notes.append(
-                f"unusual FLAC block size {blocksize}: consistent with ffmpeg encoding straight "
-                "from a decoder with small packets (compression ratio is not meaningful)"
+                Message(
+                    "single.blocksize",
+                    "unusual FLAC block size {blocksize}: consistent with ffmpeg encoding straight "
+                    "from a decoder with small packets (compression ratio is not meaningful)",
+                    blocksize=blocksize,
+                )
             )
         elif ratio is not None:
-            notes.append(f"FLAC compression ratio {ratio:.2f}")
+            notes.append(Message("single.ratio", "FLAC compression ratio {ratio:.2f}", ratio=ratio))
     return notes
 
 
