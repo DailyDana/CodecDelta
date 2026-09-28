@@ -716,3 +716,34 @@ Yan bulgular: "A Moon Shaped Pool"da vendor `Mutagen 1.45.1` ve MD5 yok --
 etiket kutuphanesi vendor'i kendi adiyla yazmis; `encoder_family` artik bunu
 kodlayici saymiyor. Hazirlik betigi kapak resmini video izi olarak M4A'ya
 kodlamaya calisip dustu: `-vn` kuralinin gerekcesi, bu kez kendi betigimde.
+
+## Arayuz (v0.1.0): nasil kuruldu, ne ogrenildi
+
+- **Motor Qt'ye bulasmaz**, arayuz ise ikiye ayrilir: `ui/present.py` ve
+  `ui/i18n.py` Qt'siz (sonucu satira/metne ceviren kurallar ekransiz test
+  edilir), widget'lar yalnizca bu satirlari cizer.
+- **Motor mesajlari cevrilebilir**: `core.messages.Message` bir `str` alt
+  sinifi; degeri Ingilizce cumle, ayrica sabit anahtar ve parametre tasir.
+  34 mesajin tumu dokunulmadan eski testlerden gecti. Bir test motorda
+  kullanilan her anahtarin Turkcesi oldugunu, bir digeri ceviri sablonunun
+  motorun parametre adlarini kullandigini kilitler.
+- **Uzun isler QThread'de**, iptal motorun `CancelToken`'i ile. Iptalden sonra
+  motor, oldurulen ffmpeg yuzunden `CancelledError` yerine "basarisiz" hatasi
+  da firlatabilir; token isaretliyse sonuc her zaman "iptal edildi" sayilir.
+  Bir test gercek bir iptalde hata kutusu acilmadigini sinar.
+- **Zengin metin HTML'den kacirilir**: notlar dosyadan gelen dizeler tasir
+  (FLAC vendor, etiketler).
+
+Yazarken bulunan kusurlar:
+
+- `CodecDeltaError.user_message` bir METOT; uc yerde cagrilmadan
+  kullanmistim. mypy yakaladi: hata kutusunda metot nesnesi basilacakti,
+  iscide sinyal calisma aninda dusecekti.
+- Ekransiz Qt testinde `QApplication`'a referans tutulmayinca Python onu
+  topluyor; sonraki widget uygulamasiz kuruluyor ve Qt sureci traceback'siz
+  sonlandiriyor (cikis 127). Uygulama modul duzeyinde tutuluyor.
+- Yorumlayici kapanirken pyqtgraph'in yari yikilmis LabelItem'lari `_sizeHint`
+  traceback'i basiyordu; testler modul sonunda pencereleri kapatip olay
+  dongusunu bosaltiyor. Gercek uygulamanin kapanisi temiz olculdu.
+- PyQt6 stub'lari hemen her getter'i `X | None` isaretliyor; `union-attr`
+  yalnizca `app.ui.*` icin kapali, motor tam strict.
