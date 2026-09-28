@@ -325,3 +325,16 @@ def test_lossy_source_compresses_better_than_real_music(
     assert a is not None and b is not None
     assert a.compression_ratio is not None and b.compression_ratio is not None
     assert b.compression_ratio < a.compression_ratio
+
+
+def test_tagging_library_vendor_is_not_an_encoder() -> None:
+    """Mutagen vendor'i yeniden yazar; kodlayici 'Mutagen' degil, bilinmiyor."""
+    from app.bitstream.flac import FlacInfo, StreamInfo
+
+    info = StreamInfo(4608, 4608, 0, 0, 48000, 2, 24, 1000, b"\x00" * 16)
+    rewritten = FlacInfo(stream_info=info, vendor="Mutagen 1.45.1")
+    assert rewritten.encoder_family is None
+    assert rewritten.vendor_rewritten
+    genuine = FlacInfo(stream_info=info, vendor="reference libFLAC 1.4.2 20221022")
+    assert genuine.encoder_family == "reference libFLAC"
+    assert not genuine.vendor_rewritten

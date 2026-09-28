@@ -63,6 +63,10 @@ _HEADER_READ_BYTES = 4 << 20
 _ZERO_MD5 = b"\x00" * 16
 
 
+# Vendor alanini kendi adiyla yeniden yazan etiket kutuphaneleri (kucuk harf onek).
+_TAGGER_VENDORS = ("mutagen", "taglib", "jaudiotagger")
+
+
 @dataclass(frozen=True)
 class StreamInfo:
     """STREAMINFO blogu: akisin temel tanimi."""
@@ -171,7 +175,18 @@ class FlacInfo:
             return "reference libFLAC"
         if lowered.startswith("lavf") or lowered.startswith("libavcodec"):
             return "ffmpeg"
+        if lowered.startswith(_TAGGER_VENDORS):
+            # Etiket kutuphanesi yeni bir VORBIS_COMMENT blogu yazarken vendor'i
+            # kendi adiyla degistirir; kodlayici bilgisi kaybolmustur. Gercek bir
+            # 24/48 indirmede "Mutagen 1.45.1" olarak goruldu. Kodlayici bu
+            # durumda BILINMIYOR, "Mutagen" degil.
+            return None
         return self.vendor
+
+    @property
+    def vendor_rewritten(self) -> bool:
+        """Vendor bir etiketleme kutuphanesi tarafindan uzerine yazilmis mi?"""
+        return self.vendor.lower().startswith(_TAGGER_VENDORS)
 
 
 def parse_stream_info(data: bytes) -> StreamInfo | None:

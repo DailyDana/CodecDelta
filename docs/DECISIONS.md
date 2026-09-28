@@ -687,3 +687,32 @@ karsi 0.52). Oran KANIT DEGIL, rapor notu; 256'nin altindaki blok boyu ise
 "cozucuden dogrudan kodlanmis" izi olarak not ediliyor -- hukme girmeden.
 (Blok boyunun KODLAYICIYI belirlemedigi karari gecerli; burada iddia farkli:
 47'lik blok bir kodlama YOLUNUN izi.)
+
+## Dort albumle yeniden kalibrasyon: Nyquist'e yakin duvar kanit degil
+
+Kullanici D:/music'e uc album ekledi (Radiohead "Amnesiac" CD 16/44.1,
+"A Moon Shaped Pool" 24/48, Fleetwood Mac "Mirage" 2016 remaster 24/48).
+Referanssiz dogrulayici once 34 tam parcanin 17'sine "belirsiz" dedi --
+hicbirine yanlis "kayipli" demedi, ama kural fazla urkekti:
+
+- 24/48 remaster: 23.7 kHz'de 60-80 dB duvar (Nyquist'in %99'u).
+- Amnesiac CD: 21.1-21.2 kHz'de 17-24 dB dusus (Nyquist'in %96'si).
+
+Ikisi de kaydin anti-alias / ornekleme hizi donusumu filtresi. Tek albumlu
+set bunu icermiyordu, duvar tek basina kanit sayiliyordu. Duzeltme: kesim
+medyani ANA KAPI; kesim Nyquist'e yakinsa sonuc "kayipsizla tutarli" ve duvar
+yalnizca not; duvar ancak Nyquist'in %95'inin altindaysa codec izi.
+
+Genisletilmis set (21 gercek kaynak, 4 album, 231 dosya): gercek 21/21 dogru,
+sifir yanlis "kayipli"; seffaf olmayan codec'ler 168'de 163 yakalandi, 0
+kacirildi, 5 belirsiz (hepsi AAC 128, PNS). 34 tam parca: 34/34.
+
+Marj daraldi ve bu belgelenmeli: gercek min kesim 20.87 kHz, codec max 20.63
+kHz. Esik 20.75'e kondu -- her iki yana ~120 Hz. Ilk (tek album) kalibrasyonda
+marj 1 kHz gorunuyordu; daha cok veri daha dar ama daha gercek bir marj
+verdi. Ayni dersin tekrari: kucuk orneklem fazla iyimser.
+
+Yan bulgular: "A Moon Shaped Pool"da vendor `Mutagen 1.45.1` ve MD5 yok --
+etiket kutuphanesi vendor'i kendi adiyla yazmis; `encoder_family` artik bunu
+kodlayici saymiyor. Hazirlik betigi kapak resmini video izi olarak M4A'ya
+kodlamaya calisip dustu: `-vn` kuralinin gerekcesi, bu kez kendi betigimde.
