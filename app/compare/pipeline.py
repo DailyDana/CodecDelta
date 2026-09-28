@@ -36,6 +36,7 @@ from app.dsp import warp
 from app.dsp.accum import CrossSpectrum, hz_to_bin
 from app.dsp.stft import StreamingStft, hann
 from app.dsp.transforms import db
+from app.psycho.nmr import NmrAccumulator
 
 DEFAULT_FFT_SIZE = 4096
 
@@ -123,6 +124,20 @@ def _mid_side(
     left = block[:, channel_map[0] if channel_map else 0].astype(np.float64)
     right = block[:, channel_map[1] if channel_map else 1].astype(np.float64)
     return (left + right) * 0.5, (left - right) * 0.5
+
+
+class _Fanout:
+    """Ayni spektrum ciftini birden fazla biriktiriciye dagitir.
+
+    Capraz spektrum ve NMR ayni gecisten beslenir; ikinci bir gecis yok.
+    """
+
+    def __init__(self, *sinks: CrossSpectrum | NmrAccumulator) -> None:
+        self.sinks = sinks
+
+    def add(self, a: np.ndarray, b: np.ndarray) -> None:
+        for sink in self.sinks:
+            sink.add(a, b)
 
 
 class _Buffer:
@@ -236,12 +251,26 @@ def compare(
         )
     fraction = alignment.delay_samples - round(alignment.delay_samples)
     measure = _tracked_pass if model.slope else _main_pass
-    mid, side, samples = measure(
+    bins = fft_size // 2 + 1
+    stereo = ref_stream.channels >= 2
+    mid = CrossSpectrum(bins)
+    side = CrossSpectrum(bins) if stereo else None
+    # NMR icin kazanc plandan: test ~= gain * reference. Isaret polariteden.
+    plan_gain = alignment.polarity * 10.0 ** (alignment.gain_db / 20.0)
+    nmr = NmrAccumulator(
+        rate,
+        fft_size,
+        gain=plan_gain,
+        expected_frames=int(test_env.duration_s * rate) // (fft_size // 2),
+    )
+    samples = measure(
         ffmpeg,
         ref_source,
         test_source,
         model,
         alignment.channel_map,
+        _Fanout(mid, nmr),
+        _Fanout(side) if side is not None else None,
         fft_size=fft_size,
         resample=resample,
         cancel=cancel,
@@ -305,6 +334,7 @@ def compare(
         polarity=-1 if gain < 0 else 1,
         frames=mid.frames,
         samples=samples,
+        nmr=nmr.summary(),
         notes=tuple(notes),
     )
 
@@ -330,11 +360,13 @@ def _main_pass(
     test_source: Source,
     model: DelayModel,
     channel_map: tuple[int, ...],
+    mid: _Fanout,
+    side: _Fanout | None,
     *,
     fft_size: int,
     resample: ResampleCfg,
     cancel: CancelToken | None,
-) -> tuple[CrossSpectrum, CrossSpectrum | None, int]:
+) -> int:
     """Iki dosyayi bastan akitip capraz spektrumu biriktirir.
 
     Test tarafi sabit adimli STFT'dir. Her test cercevesi icin referans
@@ -349,10 +381,9 @@ def _main_pass(
     freqs = np.arange(fft_size // 2 + 1) / fft_size
     stereo = ref_source.channels >= 2
     test_mid_stft, test_side_stft = StreamingStft(fft_size, hop), StreamingStft(fft_size, hop)
-    mid = CrossSpectrum(test_mid_stft.bins)
-    side = CrossSpectrum(test_side_stft.bins) if stereo else None
     offsets = np.arange(fft_size)
     frame_index = 0
+    fed = 0
 
     def stream(source: Source) -> PcmStream:
         return open_pcm(
@@ -389,6 +420,7 @@ def _main_pass(
             buffer.cover(int(whole[usable].min()), int(whole[usable].max()) + fft_size)
             usable &= (whole >= buffer.base) & (whole + fft_size <= buffer.end)
             if usable.any():
+                fed += int(usable.sum())
                 index = (whole[usable] - buffer.base)[:, None] + offsets
                 ramp = np.exp(-2j * np.pi * np.outer(delay[usable], freqs))
                 mid.add(np.fft.rfft(buffer.mid[index] * window, axis=1) * ramp, spectra_mid[usable])
@@ -399,7 +431,7 @@ def _main_pass(
                     )
             if buffer.eof and whole[-1] + fft_size > buffer.end:
                 break
-    return mid, side, mid.frames * hop
+    return fed * hop
 
 
 def _tracked_pass(
@@ -408,11 +440,13 @@ def _tracked_pass(
     test_source: Source,
     model: DelayModel,
     channel_map: tuple[int, ...],
+    mid: _Fanout,
+    side: _Fanout | None,
     *,
     fft_size: int,
     resample: ResampleCfg,
     cancel: CancelToken | None,
-) -> tuple[CrossSpectrum, CrossSpectrum | None, int]:
+) -> int:
     """Saat kaymasi varken: referans her ornek icin kendi konumundan orneklenir.
 
     Test ornegi T icin referans konumu `P = T - d(T)`; `warp.sample` bunu
@@ -424,8 +458,6 @@ def _tracked_pass(
     stereo = ref_source.channels >= 2
     stfts = [StreamingStft(fft_size, hop) for _ in range(4)]
     ref_mid_stft, ref_side_stft, test_mid_stft, test_side_stft = stfts
-    mid = CrossSpectrum(ref_mid_stft.bins)
-    side = CrossSpectrum(ref_side_stft.bins) if stereo else None
     position = 0
     started = False
     fed = 0
@@ -472,4 +504,4 @@ def _tracked_pass(
                 fed += int(keep.sum())
             if done:
                 break
-    return mid, side, fed
+    return fed

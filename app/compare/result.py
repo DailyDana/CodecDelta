@@ -15,6 +15,7 @@ from typing import Literal
 
 from app.align.plan import AlignmentPlan
 from app.dsp.accum import BandStats
+from app.psycho.nmr import NmrSummary
 
 # Bir bandin S/N'i olcum tabaninin bu kadar yakinindaysa olculen sey codec
 # degil zincirin kendisidir. Plan kurali.
@@ -74,6 +75,8 @@ class ComparisonResult:
     # STFT cercevesi ve ortusen ornek sayisi (analiz hizinda).
     frames: int = 0
     samples: int = 0
+    # Gurultu/maske orani ozeti; olculmediyse None.
+    nmr: NmrSummary | None = None
     notes: tuple[str, ...] = ()
 
     @property

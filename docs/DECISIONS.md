@@ -572,3 +572,60 @@ warp numpy'de.
 kurali yalnizca bir yonu korur. Bant duzeni artik her zaman
 `min(cutoff, 0.99) x Nyquist`te bitiyor: kesirli gecikme en ust %1'de tanimsiz
 (olculen, `stft.phase_shift`) ve bant duyulabilir aralikta degil.
+
+## NMR: tonalite bant basina (MPEG tepe kurali), mutlak degere esik baglanmaz
+
+Maskeleme modeli Johnston/MPEG-1 model 1 bicimi (ERB bantlari, Schroeder
+yayilmasi, Terhardt ATH). Tonalite icin uc yontem ayni gercek FLAC/Opus
+ciftinde (~141 kbps, dinlemede seffafa yakin, 9.5 dk) olculdu:
+
+| tonalite | MPEG toplam NMR p50 | p95 | 0 dB ustu cerceve | en kotu bant p50 |
+|---|---|---|---|---|
+| kuresel SFM (cerceve basina tek sayi) | +5.8 | +10.2 | %91.4 | +14.2 |
+| bant basina SFM | -9.2 | -6.8 | %0.0 | -2.8 |
+| **MPEG tonal bilesen kurali (bant basina)** | **+0.8** | +8.2 | %57.5 | -- |
+
+Ayni dosya, ayni gurultu, medyanda **15 dB yayilim**. Plan "NMR yuzde esikleri
+dayanaksiz" demisti; bu onun olcumu. Hicbir mutlak NMR degerine hukum
+baglanmaz; hukmu capa merdiveni verir. NMR'in savunulan tek ozelligi bitrate
+ile MONOTON olmasi (merdiven testi sinar) ve spektrogramda farkin NEREDE
+oldugunu gostermesi.
+
+Neden tepe kurali: kuresel SFM'de Johnston'in tonal payi (14.5 + z, 8 kHz'de
+35 dB) tum spektruma yayiliyordu -- MPEG model 1 tonal bilesenleri yerel
+siniflandirir. Bant basina SFM ise bant genisligine bagli: 20 binlik bantta
+saf bir tonun SFM'i Hann sizintisi yuzunden ~-34 dB'de takiliyor (Johnston'in
+-60 dB hedefi binlerce binlik tam spektrum icin) ve saf ton "yari tonal"
+(alpha 0.57) sayiliyordu. Tepe kurali (komsularini 7 dB asan yerel maksimum,
+ana lob enerjisi tonal) 200 Hz'de de 8 kHz'de de saf tona >0.9 veriyor.
+Bilinen zayifligi: 2-4 binlik en dar bantlarda tesadufi bir gurultu tepesi
+tum bandi tonal yapabilir; o bantlar dusuk frekansta ve tonal pay orada kucuk.
+
+Olcek kalibrasyonu: tam olcekli sinusun BANT ENERJISI 1.0 (tepe bini degil;
+Hann ana lobu +1.76 dB veriyordu). ATH icin "0 dBFS = 96 dB SPL" varsayimi.
+
+## Capa merdiveni kendi kendini dogruladi
+
+Mansetteki hukum mutlak bir esikten degil, kullanicinin kendi referansindan
+kodlanan bir merdivenden geliyor. Gercek FLAC ile YouTube Opus (kap 152 kbps,
+gercek ~141; 9.5 dk), her basamak ~15 s:
+
+| Opus kbps | codec S/N | NMR p50 | NMR p95 | 0 dB ustu cerceve |
+|---|---|---|---|---|
+| 64 | 19.62 dB | +7.2 | +13.8 | %94.0 |
+| 96 | 23.15 | +3.8 | +10.8 | %78.5 |
+| 128 | 25.65 | +0.8 | +8.8 | %57.7 |
+| 192 | 28.66 | -3.2 | +4.2 | %27.1 |
+| 256 | 30.93 | -7.2 | -0.2 | %4.9 |
+| **YouTube** | **25.62** | +0.8 | **+8.2** | %57.5 |
+
+Iki eksen de bitrate ile MONOTON (NMR'in savunulan tek ozelligi buydu) ve test
+dosyasini ayni yere koyuyor: S/N ile ~128 kbps, NMR ile ~134 kbps. YouTube'un
+Opus kodlayicisinin ffmpeg libopus 128k'siyla ayni bozulmayi vermesi, kabin
+yazdigi 152'den dusuk ama makul: YouTube VBR hedefini ve kodlayici surumunu
+aciklamiyor. Gorece kullanimda NMR'in mutlak ofseti sadelesiyor -- ayni
+model iki tarafa da uygulaniyor.
+
+Ara degerleme log2(bitrate) uzerinde dogrusal. Eksen monoton degilse konum
+yine verilir ama "yaklasik" diye isaretlenir; iki eksen bir basamaktan fazla
+ayrisirsa ikisi de soylenir, hangisinin dogru oldugu iddia edilmez.
