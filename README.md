@@ -106,6 +106,10 @@ uv pip install -r requirements-dev.txt
 .venv\Scripts\python -m pytest         # run the tests
 ```
 
+After setup, `CodecDelta.bat` starts the window without a console. Drop one or two audio
+files onto it to load them as reference and test; `CodecDelta.bat --console` keeps a console
+open to show errors if the window does not appear.
+
 ## ffmpeg
 
 CodecDelta does **not** bundle or redistribute ffmpeg; it locates an ffmpeg already present
