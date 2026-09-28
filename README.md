@@ -20,10 +20,10 @@ question from a single file with no reference: *is this FLAC really lossless, or
 | `dsp/`, `align/` — sub-sample delay estimation and alignment validity | working |
 | coarse alignment, drift/PAL detection, "same recording?" verdict | working (engine only) |
 | single-pass comparison: per-band SNR (mid/side), linear vs codec-noise split, measured floor, clock-drift tracking | working (engine only) |
-| psychoacoustic verdict, referenceless transcode detection | not started |
+| ERB masking model + NMR, anchor ladder verdict ("equivalent to Opus ~128 kbps"), referenceless lossy-source detection with calibrated thresholds | working (engine only) |
 | user interface, encoder panel, HTML report, ABX test, batch scan, packaging | not started |
 
-373 tests, `ruff` + `mypy --strict` clean, CI on Windows.
+416 tests, `ruff` + `mypy --strict` clean, CI on Windows.
 
 ## Why this repository might be worth reading
 
@@ -53,6 +53,17 @@ ideas were implemented, measured, and then removed because the measurement disag
 - **ffmpeg can requantise to 16 bits in the middle of a resampling chain.** A 16-bit source
   round-tripped 44.1→48→44.1 kHz measured 81 dB instead of 148 dB until the chain was
   forced to floating point.
+- **One tonality choice moves the noise-to-mask ratio by 15 dB.** On the same near-transparent
+  Opus file the median NMR read +5.8, −9.2 or +0.8 dB depending on how tonality was estimated.
+  No verdict rests on an absolute NMR; the headline comes from a ladder of the user's own
+  reference encoded at known bitrates, which is monotonic and self-validating.
+- **The plan's transcode heuristics were partly backwards.** On nine CD tracks and 117
+  transcodes: the CD itself has a steep knee at 19.6 kHz, per-frame cutoff variance runs the
+  opposite way from the plan, and the side channel does not discriminate. What does: the
+  median per-frame cutoff (real ≥ 21.2 kHz, every non-transparent codec ≤ 20.2 kHz).
+- **ffmpeg's FLAC encoder takes its block size from the decoder feeding it.** An MP3 decoded
+  straight to FLAC gets 47-sample blocks and barely compresses (0.97), which had made
+  compression ratio look like a strong lossy-source signal. It is not.
 - **PAL speed-up cannot be measured by alignment anchors — so it is tested instead.**
   Anchors lose lock beyond about 1000 ppm; PAL is 41,667 ppm. But PAL is not a continuous
   unknown, it is one entry in a short table, and testing each entry recovers it exactly.
