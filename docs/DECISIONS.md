@@ -572,3 +572,118 @@ warp numpy'de.
 kurali yalnizca bir yonu korur. Bant duzeni artik her zaman
 `min(cutoff, 0.99) x Nyquist`te bitiyor: kesirli gecikme en ust %1'de tanimsiz
 (olculen, `stft.phase_shift`) ve bant duyulabilir aralikta degil.
+
+## NMR: tonalite bant basina (MPEG tepe kurali), mutlak degere esik baglanmaz
+
+Maskeleme modeli Johnston/MPEG-1 model 1 bicimi (ERB bantlari, Schroeder
+yayilmasi, Terhardt ATH). Tonalite icin uc yontem ayni gercek FLAC/Opus
+ciftinde (~141 kbps, dinlemede seffafa yakin, 9.5 dk) olculdu:
+
+| tonalite | MPEG toplam NMR p50 | p95 | 0 dB ustu cerceve | en kotu bant p50 |
+|---|---|---|---|---|
+| kuresel SFM (cerceve basina tek sayi) | +5.8 | +10.2 | %91.4 | +14.2 |
+| bant basina SFM | -9.2 | -6.8 | %0.0 | -2.8 |
+| **MPEG tonal bilesen kurali (bant basina)** | **+0.8** | +8.2 | %57.5 | -- |
+
+Ayni dosya, ayni gurultu, medyanda **15 dB yayilim**. Plan "NMR yuzde esikleri
+dayanaksiz" demisti; bu onun olcumu. Hicbir mutlak NMR degerine hukum
+baglanmaz; hukmu capa merdiveni verir. NMR'in savunulan tek ozelligi bitrate
+ile MONOTON olmasi (merdiven testi sinar) ve spektrogramda farkin NEREDE
+oldugunu gostermesi.
+
+Neden tepe kurali: kuresel SFM'de Johnston'in tonal payi (14.5 + z, 8 kHz'de
+35 dB) tum spektruma yayiliyordu -- MPEG model 1 tonal bilesenleri yerel
+siniflandirir. Bant basina SFM ise bant genisligine bagli: 20 binlik bantta
+saf bir tonun SFM'i Hann sizintisi yuzunden ~-34 dB'de takiliyor (Johnston'in
+-60 dB hedefi binlerce binlik tam spektrum icin) ve saf ton "yari tonal"
+(alpha 0.57) sayiliyordu. Tepe kurali (komsularini 7 dB asan yerel maksimum,
+ana lob enerjisi tonal) 200 Hz'de de 8 kHz'de de saf tona >0.9 veriyor.
+Bilinen zayifligi: 2-4 binlik en dar bantlarda tesadufi bir gurultu tepesi
+tum bandi tonal yapabilir; o bantlar dusuk frekansta ve tonal pay orada kucuk.
+
+Olcek kalibrasyonu: tam olcekli sinusun BANT ENERJISI 1.0 (tepe bini degil;
+Hann ana lobu +1.76 dB veriyordu). ATH icin "0 dBFS = 96 dB SPL" varsayimi.
+
+## Capa merdiveni kendi kendini dogruladi
+
+Mansetteki hukum mutlak bir esikten degil, kullanicinin kendi referansindan
+kodlanan bir merdivenden geliyor. Gercek FLAC ile YouTube Opus (kap 152 kbps,
+gercek ~141; 9.5 dk), her basamak ~15 s:
+
+| Opus kbps | codec S/N | NMR p50 | NMR p95 | 0 dB ustu cerceve |
+|---|---|---|---|---|
+| 64 | 19.62 dB | +7.2 | +13.8 | %94.0 |
+| 96 | 23.15 | +3.8 | +10.8 | %78.5 |
+| 128 | 25.65 | +0.8 | +8.8 | %57.7 |
+| 192 | 28.66 | -3.2 | +4.2 | %27.1 |
+| 256 | 30.93 | -7.2 | -0.2 | %4.9 |
+| **YouTube** | **25.62** | +0.8 | **+8.2** | %57.5 |
+
+Iki eksen de bitrate ile MONOTON (NMR'in savunulan tek ozelligi buydu) ve test
+dosyasini ayni yere koyuyor: S/N ile ~128 kbps, NMR ile ~134 kbps. YouTube'un
+Opus kodlayicisinin ffmpeg libopus 128k'siyla ayni bozulmayi vermesi, kabin
+yazdigi 152'den dusuk ama makul: YouTube VBR hedefini ve kodlayici surumunu
+aciklamiyor. Gorece kullanimda NMR'in mutlak ofseti sadelesiyor -- ayni
+model iki tarafa da uygulaniyor.
+
+Ara degerleme log2(bitrate) uzerinde dogrusal. Eksen monoton degilse konum
+yine verilir ama "yaklasik" diye isaretlenir; iki eksen bir basamaktan fazla
+ayrisirsa ikisi de soylenir, hangisinin dogru oldugu iddia edilmez.
+
+## Referanssiz dogrulama: kesim medyani ayiriyor, IQR ve side ayirmiyor
+
+Ozellikler etiketli sette olculdu (9 gercek CD parcasi, tek album, 60 s
+kesitler; her birinden ffmpeg ile 13 transcode; toplam 126 dosya; tablo
+`app/single/thresholds.py` icinde). Uc bulgu plani degistirdi:
+
+1. **Gercek CD de dik bir diz gosteriyor.** 19.6 kHz'de 500 Hz icinde ~5 dB
+   dusus; "dB/oktav"a cevrilince -110 gorunuyordu cunku 20 kHz'de 500 Hz
+   0.035 oktavdir. Planin "dogal roll-off 6-18 dB/okt, codec 60-200" tablosu bu
+   master icin gecersiz. Metrik "500 Hz'de dB dusus" oldu: gercek 4.6-10.2,
+   MP3/Opus/Vorbis 32.7-69.2. Dik diz tek basina kanit degil.
+2. **Cerceve kesim IQR planin TERSINE calisiyor.** Gercek 0/43/1669 Hz,
+   codec'ler 65-2500 Hz. Gercek CD'de icerik Nyquist'e kadar var, kesim tepede
+   sabit; codec'te sfb21 kuantalamasi kesimi cerceveden cerceveye kaydiriyor.
+   Kanit olarak KULLANILMIYOR.
+3. **Side kanali ayirt etmiyor.** ffmpeg kodlayicilari joint-stereo'da side'i
+   cokertmiyor (gercek -2.7 dB medyan, codec'ler -2..-7). Kullanilmiyor.
+
+En temiz ayirici cerceve kesim medyani (referans-55 dB): gercek >= 21.2 kHz,
+seffaf olmayan her codec <= 20.2 kHz. Taban ve diz dususu bunu destekler ama
+AAC-PNS tabani -24.6'ya kadar cikariyor (sentezlenmis gurultu): bilinen yanlis
+negatif yonu. AAC 256 ve MP3 V0'in bazi parcalari uc ozellikte de gercekle
+ayni: spektral olarak ayirt edilemez. Arac onlara "kayipsiz kaynakla tutarli"
+der; dil kurali ("kanitlandi" degil "tutarli") bu yuzden var.
+
+Sette KOYU gercek kayit yok (eski, bant sinirli). Boyle bir kayit dusuk kesim
+gosterir; onu "belirsiz"e tasiyacak karsi-kanitlar (diz ustu icerik, yumusak
+diz) yalnizca sentetik veriyle sinandi.
+
+## Kalibrasyon seti 16 bit olmali; sikistirma orani blok boyuna bagimli
+
+Ilk etiketli set 24 bitlik transcode'larla uretilmisti: ffmpeg kayipli
+codec'i float cozer ve FLAC'a s32 yazar. Spektral ozellikler etkilenmez
+(float yol) ama diz ustu taban -92..-128 gorunuyordu; 16 bitte kuantalama
+gurultusu tabani **-64**'e cekiyor. Sahte bir FLAC hemen her zaman 16 bittir.
+Esikler 16 bit tabloya gore yeniden konuldu: taban -60 -> **-55** (gercek min
+-44.4, codec max -64.1), duvar 25 -> **18 dB/500 Hz** (gercek max 10.2,
+codec min 20.7).
+
+FLAC sikistirma orani (plan: gercek 0.55-0.70, kayipli kaynakli 0.40-0.55):
+
+| kaynak | blok boyu | oran |
+|---|---|---|
+| gercek CD | 3600 | 0.37 / 0.53 / 0.61 |
+| MP3 -> FLAC (ffmpeg varsayilan) | **47** | 0.81 / 0.96 / 0.97 |
+| MP3 -> FLAC, `-frame_size 4096` | 4096 | 0.452 (tek parca) |
+| Opus -> FLAC | 5010 | 0.35 / 0.50 / 0.58 |
+| AAC -> FLAC | 1024 | 0.37 / 0.51 / 0.59 |
+| Vorbis -> FLAC | 128 | 0.47 / 0.64 / 0.70 |
+
+ffmpeg'in flac kodlayicisi dogrudan bir cozucuden beslendiginde blok boyunu
+cozucunun paket boyundan aliyor; 47 ornekli bloklarla dosya neredeyse
+sikismiyor. Blok duzeltilince planin yonu tutuyor ama fark zayif (0.45-0.50'ye
+karsi 0.52). Oran KANIT DEGIL, rapor notu; 256'nin altindaki blok boyu ise
+"cozucuden dogrudan kodlanmis" izi olarak not ediliyor -- hukme girmeden.
+(Blok boyunun KODLAYICIYI belirlemedigi karari gecerli; burada iddia farkli:
+47'lik blok bir kodlama YOLUNUN izi.)
