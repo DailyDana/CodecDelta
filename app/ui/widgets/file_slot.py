@@ -120,6 +120,12 @@ class FileSlot(QFrame):
         self._refresh()
         self.changed.emit()
 
+    def select_stream(self, audio_index: int) -> None:
+        """Belirli bir ses izini secer (orn. kodlanan iz Analiz'e tasinirken)."""
+        position = self._tracks.findData(audio_index)
+        if position >= 0:
+            self._tracks.setCurrentIndex(position)
+
     def clear(self) -> None:
         self.info = None
         self._name.setText(tr("slot.hint"))

@@ -747,3 +747,24 @@ Yazarken bulunan kusurlar:
   dongusunu bosaltiyor. Gercek uygulamanin kapanisi temiz olculdu.
 - PyQt6 stub'lari hemen her getter'i `X | None` isaretliyor; `union-attr`
   yalnizca `app.ui.*` icin kapali, motor tam strict.
+
+## Kodlama paneli: tablo kodda, kullanilabilirlik calisma aninda
+
+Codec tablosu (`encode/matrix.py`) elle yazili: hangi bitrate'ler, hangi
+kalite olcegi, hangi secenekler. Ama bir kodlayicinin VAR olup olmadigi
+ffmpeg derlemesinden olculur; yoksa secenek gri ve sebebi ipucunda
+(libfdk_aac: `--disable-libfdk-aac`). Baska bir ffmpeg ile ayni arayuz
+dogru davranir.
+
+Tablo bir testle dogrulaniyor: her kullanilabilir codec, her modda ve her
+secenegin varsayilan olmayan her degeriyle 3 s kodlanir ve ffprobe beklenen
+codec'i gormeli -- 38 varyant, hicbiri dusmedi. Tabloya yazilip hic
+denenmemis bir secenek, arayuzde tiklayinca hata veren bir dugme olurdu.
+
+Tutarlilik capraz kontrolu: panelden Opus 96k kodlanip otomatik
+karsilastirilan gercek parca 23.15 dB verdi -- merdivenin 96k basamaginda
+bagimsiz olarak olculen deger (23.15) ile ayni.
+
+Ilerleme icin Runner'a yeni bir sinyal eklenmedi: kodlama isi asama
+anahtari olarak "progress:<0..1>" yayiyor. Runner genel kaliyor, is tipi
+bilmiyor.

@@ -11,6 +11,7 @@ from app.core.ffmpeg_locate import FFmpegTools
 from app.core.settings import Settings
 from app.ui.i18n import LANGUAGES, set_language, tr
 from app.ui.tab_analyze import AnalyzeTab
+from app.ui.tab_encode import Encoded, EncodeTab
 
 _LANGUAGE_NAMES = {"en": "English", "tr": "Türkçe"}
 
@@ -46,22 +47,39 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"{tr('app.title')} {__version__}")
         self.tabs = QTabWidget()
         self.analyze = AnalyzeTab(self.tools, self.settings)
+        self.encode = EncodeTab(self.tools, self.settings)
+        self.encode.encoded.connect(self._on_encoded)
         self.tabs.addTab(self.analyze, tr("tab.analyze"))
+        self.tabs.addTab(self.encode, tr("tab.encode"))
         self.setCentralWidget(self.tabs)
+
+    def _on_encoded(self, done: Encoded) -> None:
+        """Kodlama bitti: istenmisse Analiz'e gec, kaynak/cikti ile karsilastir."""
+        self.settings = self.encode.settings
+        if not done.compare or self.analyze.runner.busy:
+            return
+        self.analyze.load(done.source, done.output)
+        self.analyze.reference.select_stream(done.stream_index)
+        self.tabs.setCurrentWidget(self.analyze)
+        self.analyze.start_compare()
 
     def set_language(self, code: str) -> None:
         """Dili degistirir ve arayuzu yeniden kurar. Yuklu dosyalar korunur."""
-        if code == self.settings.language or self.analyze.runner.busy:
+        if code == self.settings.language or self.analyze.runner.busy or self.encode.runner.busy:
             return
         reference, test = self.analyze.reference.path, self.analyze.test.path
+        source = self.encode.source.path
+        self.settings = self.encode.settings
         self.settings = Settings(**{**self.settings.__dict__, "language": code}).clamped()
         settings_mod.save(self.settings)
         self._build()
         self.analyze.load(reference, test)
+        if source is not None:
+            self.encode.source.set_path(source)
 
     def closeEvent(self, event: QCloseEvent | None) -> None:
-        runner = self.analyze.runner
-        if runner.busy:
-            runner.cancel()
-            runner.wait(10000)
+        for runner in (self.analyze.runner, self.encode.runner):
+            if runner.busy:
+                runner.cancel()
+                runner.wait(10000)
         super().closeEvent(event)
