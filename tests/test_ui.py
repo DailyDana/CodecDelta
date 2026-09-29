@@ -309,3 +309,108 @@ def test_cancel_reports_cancelled_not_an_error(ffmpeg_tools, tmp_path: Path) -> 
     assert tab.stage.text() == "Cancelled."
     assert tab.compare_button.isEnabled()
     window.close()
+
+
+def test_encode_tab_greys_out_missing_encoders_and_follows_the_spec() -> None:
+    _qt_app()
+    from PyQt6.QtGui import QStandardItemModel
+
+    from app.core.ffmpeg_locate import Capabilities, FFmpegTools
+    from app.core.settings import Settings
+    from app.encode import matrix
+    from app.ui.tab_encode import EncodeTab
+
+    caps = Capabilities(
+        version="test",
+        build_flags=frozenset(),
+        filters=frozenset(),
+        encoders=frozenset({"libopus", "libmp3lame", "aac", "flac"}),
+    )
+    tab = EncodeTab(FFmpegTools(Path("ffmpeg"), Path("ffprobe"), caps), Settings())
+    model = tab.codec.model()
+    assert isinstance(model, QStandardItemModel)
+    for i, spec in enumerate(matrix.SPECS):
+        item = model.item(i)
+        assert item is not None
+        assert item.isEnabled() == (spec.encoder in caps.encoders), spec.key
+    assert tab.spec.key == "opus"  # ilk kullanilabilir
+
+    tab.codec.setCurrentIndex(tab.codec.findData("mp3"))
+    assert not tab.mode_quality.isHidden()
+    tab.mode_quality.setChecked(True)
+    tab.quality.setValue(0)
+    choice = tab.choice()
+    assert choice.mode == "quality" and choice.quality == 0
+    assert matrix.describe(choice) == "mp3V0"
+
+    tab.codec.setCurrentIndex(tab.codec.findData("aac"))
+    assert tab.mode_quality.isHidden()
+    tab._option_boxes["aac_pns"].setCurrentIndex(1)
+    assert not tab.warning.isHidden() and "SNR" in tab.warning.text()
+
+    tab.codec.setCurrentIndex(tab.codec.findData("flac"))
+    assert tab.choice().mode == "lossless"
+    assert not tab.start_button.isEnabled()  # kaynak yok
+    tab.close()
+
+
+@pytest.mark.needs_ffmpeg
+def test_encode_then_compare_runs_through_the_window(ffmpeg_tools, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    """Kodla -> Analiz sekmesine gec -> karsilastir, tek tikla."""
+    app = _qt_app()
+    import app.core.settings as settings_mod
+    from app.core.settings import Settings
+    from app.ui.main_window import MainWindow
+
+    ff = str(ffmpeg_tools.ffmpeg)
+    source = tmp_path / "src.flac"
+    subprocess.run(
+        [
+            ff,
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "anoisesrc=color=pink:sample_rate=44100:duration=12:seed=6,tremolo=f=1.1:d=0.85",
+            "-ac",
+            "2",
+            "-c:a",
+            "flac",
+            str(source),
+        ],
+        check=True,
+    )
+    original_save = settings_mod.save
+    settings_mod.save = lambda s, path=None: True  # type: ignore[assignment]
+    try:
+        window = MainWindow(ffmpeg_tools, Settings(language="en"))
+        enc = window.encode
+        enc.source.set_path(source)
+        enc.folder.setText(str(tmp_path / "out"))
+        enc.codec.setCurrentIndex(enc.codec.findData("opus"))
+        enc.bitrate.setCurrentIndex(enc.bitrate.findData(64))
+        progress: list[str] = []
+        enc.runner.stage.connect(progress.append)
+        enc.start()
+        deadline = time.time() + 180
+        while (
+            enc.runner.busy or window.analyze.runner.busy or window.analyze.last_result is None
+        ) and time.time() < deadline:
+            app.processEvents()
+            time.sleep(0.02)
+        for _ in range(10):
+            app.processEvents()
+    finally:
+        settings_mod.save = original_save
+
+    written = tmp_path / "out" / "src_enc_opus64k.opus"
+    assert written.exists()
+    assert any(k.startswith("progress:") for k in progress)
+    assert window.tabs.currentWidget() is window.analyze
+    result = window.analyze.last_result
+    assert result is not None and result.status == "measured"
+    assert window.analyze.test.path == written
+    # Ikinci kodlama ayni adi ezmez
+    assert enc.planned_output() == tmp_path / "out" / "src_enc_opus64k_2.opus"
+    window.close()

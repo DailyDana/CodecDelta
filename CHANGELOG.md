@@ -8,6 +8,20 @@ While the version is `0.x`, the API may break between minor versions.
 
 ## [Unreleased]
 
+### Added
+- **Encode tab**: pick a source, a codec (Opus, AAC, AAC via Media Foundation,
+  MP3, Vorbis, AC-3, E-AC-3, MP2, WMA, FLAC, ALAC, WavPack), a bitrate or a
+  quality level and codec-specific options, and encode. Codecs missing from
+  the ffmpeg build are shown greyed out with the reason. Progress is shown as
+  a percentage and the encode can be cancelled; a cancelled or failed encode
+  leaves no partial file. Output files never overwrite anything (`_2`, `_3`).
+  With "compare when finished" the Analyze tab opens and compares the source
+  with the result.
+- Every codec, mode and option value in the table is encoded once by the test
+  suite with the real ffmpeg (38 variants), so no option in the panel is a
+  button that fails.
+- `CodecDelta.bat` launcher; drop files on it to open them.
+
 ## [0.1.0] - 2026-09-28
 
 First usable version: a desktop window that compares two encodes of the same

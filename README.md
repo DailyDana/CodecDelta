@@ -22,9 +22,10 @@ question from a single file with no reference: *is this FLAC really lossless, or
 | single-pass comparison: per-band SNR (mid/side), linear vs codec-noise split, measured floor, clock-drift tracking | working (engine only) |
 | ERB masking model + NMR, anchor ladder verdict ("equivalent to Opus ~128 kbps"), referenceless lossy-source detection with calibrated thresholds | working (engine only) |
 | desktop window: analyze tab (compare, verify, ladder), English/Turkish | working — v0.1.0 |
-| encoder panel, HTML report, ABX test, batch scan, packaging | not started |
+| encode panel: 12 codecs discovered from the ffmpeg build, bitrate / quality / advanced options, never overwrites, encode-then-compare | working |
+| HTML report, ABX test, batch scan, packaging | not started |
 
-428 tests, `ruff` + `mypy --strict` clean, CI on Windows.
+481 tests, `ruff` + `mypy --strict` clean, CI on Windows.
 
 ## Why this repository might be worth reading
 
