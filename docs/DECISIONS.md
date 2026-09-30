@@ -828,3 +828,20 @@ Bulgular ve durumlari: `docs/AUDIT-2026-09.md`.
   duvari gercek dizi golgeliyordu. Dogrulama (D:/music, 231 dosya, 21 gercek):
   96 kHz'e buyutulmus her dosya dogal hizdaki hukmunu aliyor (21/21 gercek
   kayipsiz); 88.2/176.4/192 kHz'te 7 dosyalik ornek ayni.
+- **D6 -- periyodik sinyal.** Sabit tonda her periyotta esit tepe var ve
+  capalar rastgele periyot katlarini seciyordu: 1 kHz sinus +3004 ppm, 440 Hz
+  "NTSC pulldown". Capa basina bir belirsizlik olculuyor (ana tepenin lobu
+  disindaki en yuksek tepe / ana tepe) ve medyan 0.5'i asarsa hiz olcumu
+  guvenilmez, plan "sinyal kendini tekrar ediyor, gecikme belirsiz" diyor.
+  Karar PAL/NTSC hipotez yarisindan ONCE, dogal (1.0) hipotezin capalariyla
+  veriliyor: olceklenmis periyodik sinyal sahte bir dogru uretebiliyordu.
+- Olcut PHAT ve duz korelasyonun KUCUGU. PHAT tek basina bandi daraltilmis
+  sinyalde bos bantlari beyazlatip rastgele tepe uretiyor (agir EQ 0.86); duz
+  korelasyon tek basina muzigi bas notalari yuzunden periyodik gosteriyor
+  (0.50-0.98). Maskeli PHAT denendi ve muzigi de belirsiz gosterdi (yalnizca
+  baskin bas binleri kaliyor). Olculen medyanlar: sinus/iki ton ~1.0; 5 gercek
+  parca ve sentetik muzik <= 0.21; agir EQ 0.24. 21 parcanin 42 gercek cifti
+  hizalandi, hicbiri periyodik sayilmadi.
+- Bilinen dar marj: bin merkezine dusmeyen bir ton cok dusuk (-60 dB) bagimsiz
+  gurultuyle tek pencerede 0.58 veriyor; karar medyana bakiyor ve esigin
+  ustunde kaliyor ama marj dar.

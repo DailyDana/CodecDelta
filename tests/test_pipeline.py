@@ -285,6 +285,53 @@ def test_surround_content_outside_the_front_pair_is_measured(
     assert any(getattr(n, "key", "") == "compare.multichannel" for n in result.notes)
 
 
+@pytest.mark.needs_ffmpeg
+def test_a_test_tone_is_not_reported_as_a_speed_change(
+    ffmpeg_tools: FFmpegTools, tmp_path: Path
+) -> None:
+    """1 kHz sinus + Opus: once "+3004 ppm hiz farki" deniyordu (D6)."""
+    ff = str(ffmpeg_tools.ffmpeg)
+    reference = tmp_path / "tone.flac"
+    subprocess.run(
+        [
+            ff,
+            "-y",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=1000:sample_rate=44100:duration=20",
+            "-ac",
+            "2",
+            "-c:a",
+            "flac",
+            str(reference),
+        ],
+        check=True,
+    )
+    test = tmp_path / "tone.opus"
+    subprocess.run(
+        [
+            ff,
+            "-y",
+            "-v",
+            "error",
+            "-i",
+            str(reference),
+            "-c:a",
+            "libopus",
+            "-b:a",
+            "128k",
+            str(test),
+        ],
+        check=True,
+    )
+    result = _run(ffmpeg_tools, reference, test)
+    assert result.plan.verdict == "unaligned", result.plan.reasons
+    assert any(getattr(r, "key", "") == "plan.periodic" for r in result.plan.reasons)
+
+
 # -- duzenlenmis dosyalar (denetim D1) --------------------------------------------
 
 

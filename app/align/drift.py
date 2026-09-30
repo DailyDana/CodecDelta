@@ -68,6 +68,17 @@ _MAX_RESIDUAL_MS = 20.0
 # bunun altinda tek bir bozuk capaya karsi kirilgan hale geliyor.
 MIN_ANCHORS = 12
 
+# Capalarin medyan belirsizligi (`gccphat.ambiguity`) bunu asarsa sinyal
+# periyodik sayilir. Olculen: saf sinus, iki ton ~1.0; gercek muzik (5 parca)
+# ve sentetik muzik <= 0.21; agir EQ'lu gurultu 0.24. Periyodik sinyalde her
+# capa baska bir periyot katini secer ve Theil-Sen bunlardan +3004 ppm ya da
+# "NTSC" uyduruyordu (denetim D6).
+MAX_MEDIAN_AMBIGUITY = 0.5
+# Periyodiklik karari icin gereken en az capa. Fit icin gerekenden (12) az:
+# periyodik sinyalde capalar korelasyon esigine de takilabiliyor (Opus'lu iki
+# ton: 8 capa) ve karar yine acik.
+_MIN_PERIODIC_ANCHORS = 5
+
 # Capa penceresinin varsayilan uzunlugu. Kisa olmasi ZORUNLU: pencere icinde
 # biriken kayma `window * (ratio - 1)` ornektir ve icerigin periyodunun yarisini
 # astiginda korelasyon coker. OLCULEN (8 kHz, 300 s, 30 capa):
@@ -108,6 +119,8 @@ class Anchor:
     # Hizalanmis pencerelerin Pearson korelasyonu (ISARETLI).
     correlation: float
     psr: float
+    # bkz. `gccphat.ambiguity`. Periyodik sinyalde ~1.
+    ambiguity: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -125,6 +138,9 @@ class DriftEstimate:
     # Theil-Sen kalintilarinin medyan mutlak sapmasi, milisaniye. Fit'in ne
     # kadar tutarli oldugunun olcusu.
     residual_ms: float
+    # Capalarin cogu periyodik bir sinyale dustu: gecikme belirsiz, hiz orani
+    # olculemez. Durum bu durumda her zaman "unreliable".
+    periodic: bool = False
 
     @property
     def ppm(self) -> float:
@@ -234,6 +250,7 @@ def collect_anchors(
                 lag_s=lag_samples / sample_rate,
                 correlation=correlation,
                 psr=estimate.psr,
+                ambiguity=gccphat.ambiguity(reference[lo:hi], window_test),
             )
         )
     return anchors
@@ -292,6 +309,8 @@ def estimate(anchors: list[Anchor], *, min_anchors: int = MIN_ANCHORS) -> DriftE
             residual_ms=float("inf"),
         )
 
+    if _is_periodic(anchors):
+        return _periodic(anchors)
     x = np.array([a.position_s for a in anchors], dtype=np.float64)
     y = np.array([a.lag_s for a in anchors], dtype=np.float64)
     slope, offset = theil_sen(x, y)
@@ -310,6 +329,24 @@ def estimate(anchors: list[Anchor], *, min_anchors: int = MIN_ANCHORS) -> DriftE
         )
 
     return _classify(ratio, offset, len(anchors), residual_ms)
+
+
+def _is_periodic(anchors: list[Anchor]) -> bool:
+    return len(anchors) >= _MIN_PERIODIC_ANCHORS and (
+        float(np.median([a.ambiguity for a in anchors])) > MAX_MEDIAN_AMBIGUITY
+    )
+
+
+def _periodic(anchors: list[Anchor]) -> DriftEstimate:
+    return DriftEstimate(
+        ratio=1.0,
+        offset_s=float(np.median([a.lag_s for a in anchors])),
+        status="unreliable",
+        label=None,
+        anchors=len(anchors),
+        residual_ms=float("inf"),
+        periodic=True,
+    )
 
 
 def _classify(ratio: float, offset_s: float, anchors: int, residual_ms: float) -> DriftEstimate:
@@ -401,6 +438,11 @@ def estimate_from_audio(
             window_s=window_s,
             min_correlation=min_correlation,
         )
+        if candidate == 1.0 and _is_periodic(anchors):
+            # Hipotez yarisina sokulmaz: olceklenmis bir periyodik sinyal de
+            # periyodiktir ama kaydirilmis frekans tepeleri esitsizlestirip
+            # sahte bir dogru uretebiliyor (1 kHz sinus: +3004 ppm).
+            return _periodic(anchors)
         if len(anchors) < MIN_ANCHORS:
             continue
         score = float(np.median([abs(a.correlation) for a in anchors]))
@@ -430,5 +472,11 @@ def estimate_from_audio(
 
 def _unreliable(residual: DriftEstimate) -> DriftEstimate:
     return DriftEstimate(
-        1.0, residual.offset_s, "unreliable", None, residual.anchors, residual.residual_ms
+        1.0,
+        residual.offset_s,
+        "unreliable",
+        None,
+        residual.anchors,
+        residual.residual_ms,
+        periodic=residual.periodic,
     )

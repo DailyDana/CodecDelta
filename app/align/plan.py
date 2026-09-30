@@ -245,6 +245,20 @@ def build(
                 )
             )
 
+    if drift is not None and drift.periodic:
+        # Sabit ton ya da dongu: her periyotta esit tepe var, hangi gecikmenin
+        # dogru oldugu bilinemez. Devam edilirse L2 rastgele bir periyot katina
+        # hizalar ve olcum anlamsiz olur; zarf da duz oldugu icin "farkli kayit"
+        # denirdi, bu da yanlis (denetim D6).
+        reasons.append(
+            Message(
+                "plan.periodic",
+                "the signal repeats itself (a steady tone or a loop): the delay between the "
+                "files is ambiguous and cannot be measured",
+            )
+        )
+        return result("unaligned")
+
     anchored = drift is not None and drift.status != "unreliable"
 
     # -- "ayni kayit mi" ilk kapi -------------------------------------------

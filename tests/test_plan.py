@@ -226,3 +226,38 @@ def test_shared_loudness_contour_is_not_the_same_recording() -> None:
     assert result.envelope.rho > 0.70, "senaryo zarfi eslestirmiyor"
     assert result.verdict == "different_recording", result.reasons
     assert not result.comparable
+
+
+# -- periyodik sinyaller (denetim D6) ------------------------------------------
+
+
+def _tone(seconds: float, freqs: tuple[float, ...]) -> np.ndarray:
+    """Sabit ton(lar), stereo."""
+    t = np.arange(int(seconds * RATE)) / RATE
+    x = sum(0.3 * np.sin(2 * np.pi * f * t) for f in freqs)
+    return np.repeat(np.asarray(x)[:, None], 2, axis=1)
+
+
+@pytest.mark.parametrize("freqs", [(1000.0,), (440.0,), (1000.0, 1500.0)])
+def test_a_steady_tone_is_ambiguous_not_a_speed_change(freqs: tuple[float, ...]) -> None:
+    """Sabit tonda her periyotta esit tepe var: hiz orani ya da gecikme uydurulmamali.
+
+    Once capalar rastgele periyot katlarini seciyor ve +3004 ppm ya da
+    "NTSC pulldown" raporlaniyordu.
+    """
+    reference = _tone(30.0, freqs)
+    test = delayed(reference, 120)
+    # Codec gurultusu yerine: iki dosyada ORTAK olmayan -50 dB gurultu. Ortak
+    # gurultu gecikmeyi gercekten belirler ve sinyali periyodik olmaktan cikarir.
+    test = test + np.random.default_rng(2).standard_normal(test.shape) * 0.3 * 10 ** (-50 / 20)
+    result = run(reference, test)
+    assert result.verdict == "unaligned", result.reasons
+    assert result.drift is not None and result.drift.periodic
+    assert any(getattr(r, "key", "") == "plan.periodic" for r in result.reasons)
+
+
+def test_heavy_eq_is_not_mistaken_for_a_periodic_signal() -> None:
+    """Bandi daraltilmis gurultude PHAT beyazlatmasi yuksek yan tepeler uretir."""
+    reference = stereo(40.0, seed=11)
+    result = run(reference, lowpass(delayed(reference, 300), 0.15))
+    assert result.drift is not None and not result.drift.periodic

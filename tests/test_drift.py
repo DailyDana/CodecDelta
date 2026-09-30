@@ -343,3 +343,28 @@ def test_estimate_from_audio_finds_its_own_coarse_offset(ratio: float) -> None:
     result = drift.estimate_from_audio(source, test, RATE)
     assert result.ratio == pytest.approx(ratio, abs=2e-6)
     assert result.offset_s == pytest.approx(3.7, abs=2e-3)
+
+
+def test_ambiguity_separates_a_tone_from_broadband_content() -> None:
+    """Periyodik sinyalde ikinci tepe ana tepeye esit; genis bantli sinyalde degil.
+
+    Capa gibi: uzun sinyalden kesilmis referans dilimi ve test penceresi; test
+    tarafinda codec gurultusu yerine BAGIMSIZ gurultu (ortak gurultu gecikmeyi
+    gercekten belirler).
+    """
+    from app.align import gccphat
+
+    rng = np.random.default_rng(3)
+    t = np.arange(40_000) / 8000.0
+
+    def pair(x: np.ndarray, noise_db: float) -> float:
+        coded = x + 10 ** (noise_db / 20) * np.std(x) * rng.standard_normal(x.size)
+        return gccphat.ambiguity(x[:20_000], coded[3000:19_000])
+
+    noise = rng.standard_normal(t.size)
+    lowpassed = np.fft.irfft(np.fft.rfft(noise) * (np.arange(20_001) < 3000), t.size)
+    assert pair(np.sin(2 * np.pi * 1000.0 * t), -40) > 0.9
+    assert pair(np.sin(2 * np.pi * 440.0 * t), -40) > 0.9
+    assert pair(noise, -40) < 0.2
+    assert pair(lowpassed, -80) < 0.3
+    assert gccphat.ambiguity(np.zeros(100), np.zeros(100)) == 0.0
