@@ -810,3 +810,11 @@ Bulgular ve durumlari: `docs/AUDIT-2026-09.md`.
   duruyor; kesime denk gelen pencere tum dosyayi "farkli master" yapiyordu.
 - Olculen: sentetik (gercek 12.05 dB) son 13 s farkli 12.08, 45-47 s kesik
   muzik 21.95 (gercek 21.69). Gercek Loreena cifti degismedi (25.62 dB).
+- **D2 -- cok kanalli mid.** Mid artik tum kanallarin ortalamasi (stereo'da
+  yine (L+R)/2), side on sol - on sag. Plan hizalamayi zaten tum kanallarin
+  ortalamasiyla yapiyordu; olcum ilk iki kanali aliyordu ve yalnizca merkezde
+  icerigi olan 5.1 dosya S/N -inf veriyordu. Kanal basina ayri olcum daha
+  dogru olurdu ama sonuc modelini ve raporu degistirir; simdilik yapilmadi ve
+  rapora hangi kanalin olculdugunu soyleyen bir not dusuluyor. Dogrulama:
+  merkez-yalniz AC-3 448k 50.42 dB; ayni merkez kanali mono cikarilip
+  karsilastirilinca da 50.42 dB.

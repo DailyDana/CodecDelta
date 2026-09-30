@@ -246,6 +246,45 @@ def test_drift_does_not_change_the_codec_measurement(
     assert drifted.headline_snr_db == pytest.approx(plain.headline_snr_db, abs=1.0)
 
 
+@pytest.mark.needs_ffmpeg
+def test_surround_content_outside_the_front_pair_is_measured(
+    ffmpeg_tools: FFmpegTools, tmp_path: Path
+) -> None:
+    """Icerigi yalnizca merkezde olan 5.1: mid tum kanallarin ortalamasi olmali.
+
+    Ilk iki kanal (FL, FR) alindiginda referans gucu 0 ve S/N -inf idi (D2).
+    """
+    ff = str(ffmpeg_tools.ffmpeg)
+    reference = tmp_path / "centre.flac"
+    subprocess.run(
+        [
+            ff,
+            "-y",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            SOURCE.format(seed=3),
+            "-af",
+            "pan=5.1|FC=c0",
+            "-c:a",
+            "flac",
+            str(reference),
+        ],
+        check=True,
+    )
+    test = tmp_path / "centre.ac3"
+    subprocess.run(
+        [ff, "-y", "-v", "error", "-i", str(reference), "-c:a", "ac3", "-b:a", "448k", str(test)],
+        check=True,
+    )
+    result = _run(ffmpeg_tools, reference, test)
+    assert result.status == "measured", result.notes
+    assert math.isfinite(result.headline_snr_db) and result.headline_snr_db > 5.0
+    assert any(getattr(n, "key", "") == "compare.multichannel" for n in result.notes)
+
+
 # -- duzenlenmis dosyalar (denetim D1) --------------------------------------------
 
 

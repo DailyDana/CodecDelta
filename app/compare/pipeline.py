@@ -136,11 +136,21 @@ def band_layout(analysis_rate: int, nyquist_hz: float) -> list[tuple[float, floa
 def _mid_side(
     block: np.ndarray, channel_map: tuple[int, ...]
 ) -> tuple[np.ndarray, np.ndarray | None]:
+    """Mid = TUM kanallarin ortalamasi, side = on sol - sag.
+
+    Stereo'da mid (L+R)/2'dir. Cok kanalli dosyada yalnizca ilk iki kanali
+    almak merkezdeki diyalogu ve arka kanallari olcumun disinda birakiyordu:
+    icerigi yalnizca merkezde olan 5.1 dosya "olculdu" ama S/N -inf cikiyordu
+    (denetim D2). Plan hizalamayi zaten tum kanallarin ortalamasiyla yapiyor
+    (`to_mono`); olcum ayni kanali kullanir.
+    """
     if block.shape[1] == 1:
         return block[:, 0].astype(np.float64), None
-    left = block[:, channel_map[0] if channel_map else 0].astype(np.float64)
-    right = block[:, channel_map[1] if channel_map else 1].astype(np.float64)
-    return (left + right) * 0.5, (left - right) * 0.5
+    ordered = block[:, list(channel_map)] if channel_map else block
+    ordered = ordered.astype(np.float64)
+    left, right = ordered[:, 0], ordered[:, 1]
+    mid = (left + right) * 0.5 if ordered.shape[1] == 2 else ordered.mean(axis=1)
+    return mid, (left - right) * 0.5
 
 
 class _Sink(Protocol):
@@ -395,6 +405,15 @@ def compare(
 
     # -- ana gecis -----------------------------------------------------------
     stage("measure")
+    if ref_stream.channels > 2:
+        notes.append(
+            Message(
+                "compare.multichannel",
+                "{channels} channels: mid is the average of all channels, side is front left "
+                "minus front right",
+                channels=ref_stream.channels,
+            )
+        )
     model = tracking.from_plan(alignment, rate)
     if model is None:
         notes.append(
