@@ -196,3 +196,12 @@ def test_file_identity_has_no_path(tmp_path: Path) -> None:
     identity = privacy.file_identity(f)
     assert identity.startswith("track.flac (")
     assert str(tmp_path) not in identity
+
+
+def test_urls_are_not_paths() -> None:
+    """ "https://" icindeki "s:/" bir surucu yolu degil; rapordaki baglanti denetimi dusurmemeli."""
+    text = "see https://github.com/DailyDana/CodecDelta and file:///x"
+    assert privacy.audit(text) == []
+    assert privacy.scrub(text) == text
+    assert privacy.audit(r"but C:\Music\a.flac is") != []
+    assert privacy.audit("and (D:/x/y.flac) too") != []

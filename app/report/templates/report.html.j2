@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="{{ lang }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="CodecDelta {{ version }}">
+<title>{{ title }} · {{ files[-1].name }}</title>
+<style>
+  :root {
+    --bg: #ffffff; --panel: #f5f5f8; --line: #dcdce4; --text: #1e1e2e; --muted: #5c5f77;
+    --accent: #7c3aed; --blue: #1e66f5; --good: #2f9e44; --warn: #b7791f; --bad: #d20f39;
+    --grid: #e6e6ee;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1e1e2e; --panel: #181825; --line: #313244; --text: #cdd6f4; --muted: #a6adc8;
+      --accent: #8b5cf6; --blue: #89b4fa; --good: #a6e3a1; --warn: #f9e2af; --bad: #f38ba8;
+      --grid: #313244;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.5 "Segoe UI", system-ui, -apple-system, sans-serif; }
+  main { max-width: 900px; margin: 0 auto; padding: 32px 16px 48px; }
+  header { display: flex; justify-content: space-between; align-items: baseline; gap: 16px;
+           border-bottom: 1px solid var(--line); padding-bottom: 12px; margin-bottom: 20px; }
+  header h1 { font-size: 20px; margin: 0; }
+  header .meta { color: var(--muted); font-size: 13px; }
+  h2 { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted);
+       margin: 28px 0 10px; }
+  .files { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .card .role { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  .card .name { font-weight: 600; overflow-wrap: anywhere; }
+  .card .id, .card .details { color: var(--muted); font-size: 13px; }
+  .card .id { font-family: Consolas, ui-monospace, monospace; }
+  .verdict { border-left: 4px solid var(--accent); }
+  .verdict.good { border-left-color: var(--good); } .verdict.warn { border-left-color: var(--warn); }
+  .verdict.bad { border-left-color: var(--bad); }
+  .verdict .big { font-size: 24px; font-weight: 700; }
+  .verdict.good .big { color: var(--good); } .verdict.warn .big { color: var(--warn); }
+  .verdict.bad .big { color: var(--bad); } .verdict.neutral .big { color: var(--accent); }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { padding: 6px 10px; border-bottom: 1px solid var(--line); text-align: right; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  td.muted { color: var(--muted); }
+  dl.summary { display: grid; grid-template-columns: max-content 1fr; gap: 4px 24px; margin: 0; }
+  dl.summary dt { color: var(--muted); } dl.summary dd { margin: 0; }
+  ul.evidence { list-style: none; padding: 0; margin: 0; }
+  ul.evidence li { padding: 3px 0 3px 22px; position: relative; }
+  ul.evidence li::before { position: absolute; left: 4px; font-weight: 700; }
+  ul.evidence li.for::before { content: "+"; color: var(--bad); }
+  ul.evidence li.against::before { content: "−"; color: var(--good); }
+  ul.evidence li.note::before { content: "·"; color: var(--muted); }
+  svg.chart { width: 100%; height: auto; display: block; margin-top: 8px; }
+  svg .grid { stroke: var(--grid); stroke-width: 1; } svg .axis { stroke: var(--muted); stroke-width: 1; }
+  svg .tick, svg .legend, svg .label { fill: var(--muted); font-size: 11px; }
+  svg .series-a { fill: var(--accent); stroke: var(--accent); stroke-width: 2; }
+  svg .series-b { stroke: var(--blue); stroke-width: 2; } svg .series-b-dot { fill: var(--blue); }
+  svg .series-c { stroke: var(--muted); stroke-width: 1.2; }
+  svg polyline.series-a { fill: none; }
+  svg .mark { fill: var(--warn); font-size: 13px; font-weight: 700; }
+  svg .marker { stroke: var(--bad); stroke-width: 1; stroke-dasharray: 3 3; }
+  svg .marker-text { fill: var(--bad); font-size: 11px; }
+  .nmr { display: grid; grid-template-columns: auto 1fr; gap: 8px; align-items: stretch; margin-top: 8px; }
+  .nmr .axis { display: flex; flex-direction: column; justify-content: space-between;
+               color: var(--muted); font-size: 11px; text-align: right; }
+  .nmr img { width: 100%; height: 220px; image-rendering: pixelated; border-radius: 4px; display: block; }
+  .scale { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; margin-top: 6px; }
+  .scale .bar { flex: 0 0 180px; height: 8px; border-radius: 4px;
+                background: linear-gradient(90deg, #11111b, #45475a 35%, #7f849c 50%, #fab387 65%, #f38ba8); }
+  p.method { color: var(--muted); font-size: 13px; margin: 6px 0; }
+  footer { margin-top: 36px; border-top: 1px solid var(--line); padding-top: 10px;
+           color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>{{ title }}</h1>
+  <div class="meta">CodecDelta {{ version }} · {{ generated }}</div>
+</header>
+
+<section class="files">
+{% for f in files %}
+  <div class="card">
+    <div class="role">{{ f.role }}</div>
+    <div class="name">{{ f.name }}</div>
+    <div class="details">{{ f.details }}</div>
+    <div class="id">{{ t("report.content_id") }} {{ f.identity }}</div>
+  </div>
+{% endfor %}
+</section>
+
+<h2>{{ t("summary.status") }}</h2>
+<div class="card verdict {{ headline.tone }}">
+  <div class="big">{{ headline.title }}</div>
+  {% if headline.detail %}<div>{{ headline.detail }}</div>{% endif %}
+</div>
+
+{% if ladder_text %}
+<h2>{{ t("report.ladder") }}</h2>
+<div class="card">
+  <div>{{ ladder_text }}</div>
+  <table>
+    <tr><th>Opus</th><th>{{ t("summary.snr") }}</th><th>NMR p95</th></tr>
+    {% for rate, snr, nmr in ladder_rows %}<tr><td>{{ rate }}</td><td>{{ snr }}</td><td>{{ nmr }}</td></tr>{% endfor %}
+  </table>
+</div>
+{% endif %}
+
+{% if summary %}
+<h2>{{ t("section.summary") }}</h2>
+<div class="card"><dl class="summary">
+{% for key, value in summary %}<dt>{{ key }}</dt><dd>{{ value }}</dd>{% endfor %}
+</dl></div>
+{% endif %}
+
+{% if reasons or counters %}
+<h2>{{ t("section.reasons") }}</h2>
+<div class="card"><ul class="evidence">
+{% for r in reasons %}<li class="for">{{ r }}</li>{% endfor %}
+{% for c in counters %}<li class="against">{{ c }}</li>{% endfor %}
+</ul></div>
+{% endif %}
+
+{% if spectrum %}
+<h2>{{ t("report.spectrum") }}</h2>
+<div class="card">{{ spectrum | safe }}
+  <p class="method">{{ t("report.spectrum_caption") }}</p>
+</div>
+{% endif %}
+
+{% if bands %}
+<h2>{{ t("section.bands") }}</h2>
+<div class="card">
+  <table>
+    <tr><th>{{ t("bands.band") }}</th><th>{{ t("bands.mid") }}</th><th>{{ t("bands.side") }}</th>
+        <th>{{ t("bands.linear") }}</th><th>{{ t("bands.floor") }}</th></tr>
+    {% for b in bands %}
+    <tr><td>{{ b.label }}</td><td{% if not b.measurable %} class="muted"{% endif %}>{{ b.mid }}</td>
+        <td>{{ b.side }}</td><td>{{ b.linear }}</td><td>{{ b.floor }}</td></tr>
+    {% endfor %}
+  </table>
+  {{ chart | safe }}
+  <p class="method">{{ t("report.bands_caption") }}</p>
+</div>
+{% endif %}
+
+{% if nmr_image %}
+<h2>{{ t("section.nmr") }}</h2>
+<div class="card">
+  <div class="nmr">
+    <div class="axis">{% for tick in nmr_ticks %}<span>{{ tick }}</span>{% endfor %}</div>
+    <img src="{{ nmr_image }}" alt="{{ t('section.nmr') }}">
+  </div>
+  <div class="scale"><span>−{{ nmr_range }} dB</span><span class="bar"></span><span>+{{ nmr_range }} dB</span>
+    <span>· 0–{{ nmr_seconds }} s</span></div>
+  <p class="method">{{ t("report.nmr_caption") }}</p>
+</div>
+{% endif %}
+
+{% if notes %}
+<h2>{{ t("section.notes") }}</h2>
+<div class="card"><ul class="evidence">
+{% for n in notes %}<li class="note">{{ n }}</li>{% endfor %}
+</ul></div>
+{% endif %}
+
+<h2>{{ t("report.method") }}</h2>
+{% if kind == "compare" %}
+<p class="method">{{ t("report.method_compare") }}</p>
+<p class="method">{{ t("disclaimer.audibility") }}</p>
+{% else %}
+<p class="method">{{ t("report.method_verify") }}</p>
+{% endif %}
+
+<footer>{{ t("report.footer") }}</footer>
+</main>
+</body>
+</html>

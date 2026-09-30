@@ -768,3 +768,24 @@ bagimsiz olarak olculen deger (23.15) ile ayni.
 Ilerleme icin Runner'a yeni bir sinyal eklenmedi: kodlama isi asama
 anahtari olarak "progress:<0..1>" yayiyor. Runner genel kaliyor, is tipi
 bilmiyor.
+
+## HTML rapor (v0.2.0)
+
+- **Tek dosya, dis kaynak yok.** Grafikler elle uretilen inline SVG; renk
+  tasimiyorlar, CSS degiskenlerinden aliyorlar, bu yuzden ayni rapor okuyucunun
+  acik ya da koyu temasinda dogru gorunuyor (basliksiz Edge ile iki temada
+  bakildi).
+- **WebP yerine bagimliliksiz PNG.** Plan spektrogramlar icin WebP
+  ongoruyordu; rapordaki tek goruntu ~41 bant x <=1000 sutunluk NMR izgarasi.
+  `zlib` ile yazilan PNG birkac on KB tutuyor ve ffmpeg ya da Qt gerektirmiyor.
+  Gercek 9.5 dk'lik karsilastirma raporu merdiven dahil 87 KB.
+- **Autoescape acik ve sinaniyor**: bir nota konan `<script>` metin olarak
+  cikiyor.
+- **Gizlilik denetimi yazmayi engelliyor**: kullanici profil yolu sizdiran bir
+  rapor diske hic yazilmiyor. Denetim, base64 goruntu verisini disarida
+  birakiyor (icinde tesadufen bir kullanici adi harf dizisi gecebilir).
+- Denetim ilk haliyle `https://` icindeki `s:/`'yi surucu yolu sayiyordu;
+  baglanti iceren her rapor reddedilirdi. Surucu harfinden once harf olmamasi
+  sarti eklendi.
+- Grafikte gorunmeyen seri lejantta da yok (taban cogu zaman 90-150 dB,
+  gorunur araligin disinda; degeri tabloda).

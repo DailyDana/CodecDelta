@@ -196,7 +196,9 @@ def test_window_builds_and_switches_language_without_ffmpeg() -> None:
 
 
 @pytest.mark.needs_ffmpeg
-def test_compare_runs_end_to_end_through_the_interface(ffmpeg_tools, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+def test_compare_runs_end_to_end_through_the_interface(
+    ffmpeg_tools, tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
     app = _qt_app()
     from app.core.settings import Settings
     from app.ui.main_window import MainWindow
@@ -250,6 +252,17 @@ def test_compare_runs_end_to_end_through_the_interface(ffmpeg_tools, tmp_path: P
     assert "tamamlandı" in tab.stage.text()
     assert tab.results.ladder_button.isEnabled()
 
+    # Raporu kaydet: dosya iletisimi atlanir, rapor Turkce ve temiz yazilmali.
+    from PyQt6.QtWidgets import QFileDialog
+
+    target = tmp_path / "rapor.html"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(target), "HTML"))
+    assert tab.report_button.isEnabled()
+    tab.save_report()
+    text = target.read_text(encoding="utf-8")
+    assert "Karşılaştırma raporu" in text and "ref.flac" in text
+    assert str(tmp_path) not in text
+
     tab.start_verify()
     deadline = time.time() + 60
     while tab.runner.busy and time.time() < deadline:
@@ -258,6 +271,8 @@ def test_compare_runs_end_to_end_through_the_interface(ffmpeg_tools, tmp_path: P
     for _ in range(10):
         app.processEvents()
     assert "Kayıpsız" in tab.results.title.text()
+    tab.save_report()
+    assert "Kayıpsızlık doğrulama raporu" in target.read_text(encoding="utf-8")
     window.close()
 
 
