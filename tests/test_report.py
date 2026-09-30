@@ -232,3 +232,23 @@ def test_a_partial_measurement_is_flagged(comparison: ComparisonResult) -> None:
     assert any("12 s left out" in value for value in rows.values())
     set_language("tr")
     assert "12 s dışarıda" in html.render_comparison(partial)
+
+
+@pytest.mark.needs_ffmpeg
+@pytest.mark.parametrize("name", ["test", "user", "mark"])
+def test_a_common_username_does_not_block_the_report(
+    comparison: ComparisonResult, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, name: str
+) -> None:
+    """`USERNAME=test` iken her rapor reddediliyordu (D4)."""
+    monkeypatch.setenv("USERNAME", name)
+    text = html.render_comparison(comparison)
+    assert html.check_privacy(text) == []
+    assert html.write(tmp_path / "r.html", text).exists()
+
+
+@pytest.mark.needs_ffmpeg
+def test_a_blocked_report_says_what_was_found(comparison: ComparisonResult) -> None:
+    poisoned = dataclasses.replace(comparison, notes=(r"loaded from D:\Private\a.flac",))
+    with pytest.raises(html.ReportPrivacyError) as caught:
+        html.write(Path("unused.html"), html.render_comparison(poisoned))
+    assert r"D:\Private" in caught.value.user_message()

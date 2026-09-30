@@ -845,3 +845,10 @@ Bulgular ve durumlari: `docs/AUDIT-2026-09.md`.
 - Bilinen dar marj: bin merkezine dusmeyen bir ton cok dusuk (-60 dB) bagimsiz
   gurultuyle tek pencerede 0.58 veriyor; karar medyana bakiyor ve esigin
   ustunde kaliyor ama marj dar.
+- **D4 -- kullanici adi yol bileseni olarak aranir.** Profil yollari
+  (USERPROFILE, APPDATA, TEMP...) ayirt edici oldugu icin her yerde alt dize
+  olarak aranmaya devam ediyor. Kullanici ve makine adi ise siradan kelime
+  olabiliyor (`test`, `user`, `mark`): denetim onlari yalnizca `\` ya da `/`
+  ardindaki yol bileseni olarak sayiyor, temizlik butun kelime olarak siliyor.
+  Rapor bu adlari yol disinda hic yazmiyor; mutlak yollar zaten ayri desenle
+  yakalaniyor. Engellenen raporun iletisi ilk uc izi gosteriyor.

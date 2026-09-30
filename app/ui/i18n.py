@@ -233,7 +233,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "action.save_report": "Raporu kaydet…",
         "report.saved": "Rapor kaydedildi: {name}",
         "error.report": "Rapor kaydedilemedi",
-        "msg.report.privacy": "Raporda hâlâ {count} kişisel iz var; dosya yazılmadı.",
+        "msg.report.privacy": "Raporda hâlâ {count} kişisel iz var ({shown}); dosya yazılmadı.",
         "tab.encode": "Kodla",
         "encode.source": "Kaynak",
         "encode.codec": "Codec",
