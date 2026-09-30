@@ -354,8 +354,16 @@ class AnalyzeTab(QWidget):
         if ref is None or test is None or self.runner.busy:
             return
         ffmpeg = self.tools.ffmpeg
-        self._last_tracks = (ref, test)
-        self._connect_once(self._on_compare)
+        tracks = (ref, test)
+
+        def done(result: object, seconds: float) -> None:
+            # Izler ancak sonucla BIRLIKTE kaydedilir. Is basinda yazildiginda
+            # iptal ya da hata sonrasi merdiven yeni dosyadan kurulup eski
+            # sonucla yargilaniyordu (denetim D17).
+            self._last_tracks = tracks
+            self._on_compare(result, seconds)
+
+        self._connect_once(done)
         self.runner.start(
             lambda token, stage: compare(ffmpeg, ref, test, cancel=token, stage=stage)
         )
@@ -395,17 +403,34 @@ class AnalyzeTab(QWidget):
         self.runner.start(job)
 
     def _connect_once(self, handler: Callable[[object, float], None]) -> None:
+        """`handler`'i yalnizca bu isin basarisina baglar.
+
+        Uc baglantinin UCU de is bitince sokulur; once yalnizca `succeeded`
+        sokuluyordu ve her iste failed/cancelled alicilari birikiyordu (D19).
+        """
+
+        def disconnect() -> None:
+            for signal, slot in (
+                (self.runner.succeeded, once),
+                (self.runner.failed, failed),
+                (self.runner.cancelled, cancelled),
+            ):
+                with contextlib.suppress(TypeError):
+                    signal.disconnect(slot)
+
         def once(result: object, seconds: float) -> None:
-            self.runner.succeeded.disconnect(once)
+            disconnect()
             handler(result, seconds)
 
-        def drop() -> None:
-            with contextlib.suppress(TypeError):
-                self.runner.succeeded.disconnect(once)
+        def failed(_message: str) -> None:
+            disconnect()
+
+        def cancelled() -> None:
+            disconnect()
 
         self.runner.succeeded.connect(once)
-        self.runner.failed.connect(lambda _: drop())
-        self.runner.cancelled.connect(drop)
+        self.runner.failed.connect(failed)
+        self.runner.cancelled.connect(cancelled)
 
     def _on_compare(self, result: object, seconds: float) -> None:
         assert isinstance(result, ComparisonResult)

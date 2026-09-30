@@ -323,6 +323,53 @@ def test_cancel_reports_cancelled_not_an_error(ffmpeg_tools, tmp_path: Path) -> 
     assert cancelled and not failures
     assert tab.stage.text() == "Cancelled."
     assert tab.compare_button.isEnabled()
+    # Iptal edilen karsilastirmanin izleri kaydedilmemeli: merdiven ve rapor
+    # onlari onceki sonucla eslestiriyordu (D17).
+    assert tab._last_tracks is None and tab.last_result is None
+    window.close()
+
+
+def test_closing_during_a_job_does_not_hang() -> None:
+    """Kapanista ana is parcacigi `wait()` icinde bloke; is yine de bitmeli (D16).
+
+    `thread.quit` kuyruklu baglantiyla ana is parcacigina gidiyordu ve bloke
+    ana is parcacigi onu hic calistiramiyordu: bekleme zaman asimina kadar
+    (10 s) suruyordu.
+    """
+    _qt_app()
+    from app.ui.worker import Runner
+
+    def job(token, stage):  # type: ignore[no-untyped-def]
+        while not token.cancelled:
+            time.sleep(0.01)
+        return None
+
+    runner = Runner()
+    runner.start(job)
+    time.sleep(0.1)
+    runner.cancel()
+    started = time.perf_counter()
+    assert runner.wait(5000)
+    assert time.perf_counter() - started < 1.0
+
+
+def test_finished_jobs_leave_no_listeners_behind(ffmpeg_tools) -> None:  # type: ignore[no-untyped-def]
+    """Her is failed/cancelled alicisi birakiyordu (15 calistirmada 16 alici, D19)."""
+    app = _qt_app()
+    from app.core.settings import Settings
+    from app.ui.main_window import MainWindow
+
+    window = MainWindow(ffmpeg_tools, Settings(language="en"))
+    tab = window.analyze
+    before = tab.runner.receivers(tab.runner.failed)
+    for _ in range(3):
+        tab._connect_once(lambda result, seconds: None)
+        tab.runner.start(lambda token, stage: None)
+        deadline = time.time() + 10
+        while tab.runner.busy and time.time() < deadline:
+            app.processEvents()
+            time.sleep(0.01)
+    assert tab.runner.receivers(tab.runner.failed) == before
     window.close()
 
 
