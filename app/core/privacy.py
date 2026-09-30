@@ -40,8 +40,11 @@ _ID_HEX_LEN = 16
 # yuzden `scrub` son care bir agdir. Yapisal alanlar (dosya adi, komut satiri)
 # `scrub_path` ve `scrub_command` ile yol farkindaligiyla temizlenir; `audit`
 # de geriye kalani yakalamak icin ayni deseni kullanir.
+# Surucu harfinin ONUNDEKI karakter bir harf olmamali: "https://" icindeki
+# "s:/" bir yol degildir. Ilk surum bunu yol sayiyordu; rapora konan tek bir
+# baglanti denetimi dusururdu.
 _ABS_PATH_RE = re.compile(
-    r"(?:[A-Za-z]:[\\/]|\\\\)"
+    r"(?:(?<![A-Za-z])[A-Za-z]:[\\/]|\\\\)"
     r"(?:[^\"'<>|\r\n]{0,260}?\.[A-Za-z0-9]{1,8}(?=[\s\"'<>|]|$)"
     r"|[^\s\"'<>|]*)"
 )

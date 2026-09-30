@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codecdelta"
-version = "0.1.0"
+version = "0.2.0"
 description = "Measure and hear what a lossy encoder did to your audio"
 requires-python = ">=3.11"
 readme = "README.md"
@@ -103,7 +103,9 @@ known-first-party = ["app"]
 # Kullaniciya gorunen metin: Turkce karakterler (i/I noktasiz), tipografik
 # tire ve carpi isareti BILEREK. ASCII kurali kod ve yorumlar icin.
 "app/ui/*" = ["RUF001"]
+"app/report/*" = ["RUF001"]
 "tests/test_ui.py" = ["S", "PTH", "RUF001"]
+"tests/test_report.py" = ["S", "PTH", "RUF001"]
 # Ceviri sozlugu ve stil sayfasi: uzun dizeler bolunmez.
 "app/ui/i18n.py" = ["E501"]
 "app/ui/theme.py" = ["E501"]

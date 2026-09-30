@@ -14,6 +14,7 @@ from pathlib import Path
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
+    QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -32,9 +33,11 @@ from PyQt6.QtWidgets import (
 from app.compare import ladder
 from app.compare.pipeline import Track, compare
 from app.compare.result import ComparisonResult
+from app.core.errors import CodecDeltaError
 from app.core.ffmpeg_locate import FFmpegTools
 from app.core.ffmpeg_runner import CancelToken
 from app.core.settings import Settings
+from app.report import html as report_html
 from app.single import verdict as single_verdict
 from app.single.verdict import Verdict
 from app.ui import present
@@ -246,6 +249,10 @@ class AnalyzeTab(QWidget):
         self.runner = Runner(self)
         self.last_result: ComparisonResult | None = None
         self._last_tracks: tuple[Track, Track] | None = None
+        # Rapor icin: son dogrulama (ve hangi iz), son merdiven.
+        self.last_verdict: tuple[Verdict, Track] | None = None
+        self.last_ladder: ladder.LadderVerdict | None = None
+        self._verify_track: Track | None = None
 
         self.reference = FileSlot(tr("slot.reference"), tools.ffprobe)
         self.test = FileSlot(tr("slot.test"), tools.ffprobe)
@@ -277,6 +284,9 @@ class AnalyzeTab(QWidget):
         actions.addSpacing(12)
         actions.addWidget(self.stage, 1)
         actions.addWidget(self.progress, 1)
+        self.report_button = QPushButton(tr("action.save_report"))
+        self.report_button.clicked.connect(self.save_report)
+        actions.addWidget(self.report_button)
 
         self.results = ResultsPanel()
         self.results.ladder_button.clicked.connect(self.start_ladder)
@@ -314,6 +324,8 @@ class AnalyzeTab(QWidget):
         self.compare_button.setEnabled(not busy and ref is not None and test is not None)
         self.verify_button.setEnabled(not busy and ref is not None)
         self.results.ladder_button.setEnabled(not busy and self.last_result is not None)
+        has_result = self.last_result is not None or self.last_verdict is not None
+        self.report_button.setEnabled(not busy and has_result)
 
     def _on_busy(self, busy: bool) -> None:
         self.progress.setVisible(busy)
@@ -360,6 +372,7 @@ class AnalyzeTab(QWidget):
                 ffmpeg, ref.info, stream_index=ref.stream_index, cancel=token
             )
 
+        self._verify_track = ref
         self._connect_once(self._on_verify)
         self.runner.start(job)
 
@@ -397,6 +410,8 @@ class AnalyzeTab(QWidget):
     def _on_compare(self, result: object, seconds: float) -> None:
         assert isinstance(result, ComparisonResult)
         self.last_result = result
+        self.last_verdict = None
+        self.last_ladder = None
         self.results.show_comparison(result)
         self._done(seconds)
         self._update_buttons()
@@ -404,12 +419,16 @@ class AnalyzeTab(QWidget):
     def _on_verify(self, verdict: object, seconds: float) -> None:
         assert isinstance(verdict, Verdict)
         self.last_result = None
+        self.last_ladder = None
+        assert self._verify_track is not None
+        self.last_verdict = (verdict, self._verify_track)
         self.results.show_verdict(verdict)
         self._done(seconds)
         self._update_buttons()
 
     def _on_ladder(self, verdict: object, seconds: float) -> None:
         assert isinstance(verdict, ladder.LadderVerdict)
+        self.last_ladder = verdict
         steps = "  ·  ".join(
             f"{r.bitrate_kbps}k {present.db_text(r.snr_db)}" for r in verdict.rungs
         )
@@ -420,6 +439,44 @@ class AnalyzeTab(QWidget):
         self.results.ladder_label.setTextFormat(Qt.TextFormat.RichText)
         self.results.ladder_label.setText(text)
         self._done(seconds)
+
+    def report_html(self) -> tuple[str, Path] | None:
+        """Son sonucun raporu ve onerilen dosya adi; sonuc yoksa None."""
+        if self.last_result is not None:
+            result = self.last_result
+            html_text = report_html.render_comparison(result, ladder=self.last_ladder)
+            stem = result.test.path.stem
+            folder = result.test.path.parent
+        elif self.last_verdict is not None:
+            verdict, track = self.last_verdict
+            html_text = report_html.render_verification(
+                verdict, track.info, stream_index=track.stream_index
+            )
+            stem = track.path.stem
+            folder = track.path.parent
+        else:
+            return None
+        if self.settings.output_dir:
+            folder = Path(self.settings.output_dir)
+        return html_text, folder / f"{stem}_codecdelta.html"
+
+    def save_report(self) -> None:
+        prepared = self.report_html()
+        if prepared is None:
+            return
+        html_text, suggested = prepared
+        path, _ = QFileDialog.getSaveFileName(
+            self, tr("action.save_report"), str(suggested), "HTML (*.html)"
+        )
+        if not path:
+            return
+        try:
+            written = report_html.write(Path(path), html_text)
+        except (OSError, CodecDeltaError) as exc:
+            message = exc.user_message() if isinstance(exc, CodecDeltaError) else str(exc)
+            QMessageBox.critical(self, tr("error.report"), localize(message))
+            return
+        self.stage.setText(tr("report.saved", name=written.name))
 
     def load(self, reference: Path | None, test: Path | None) -> None:
         """Komut satirindan ya da testten dosya yuklemek icin."""

@@ -8,7 +8,22 @@ While the version is `0.x`, the API may break between minor versions.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-30
+
 ### Added
+- **HTML reports** ("Save report…" in the Analyze tab) for a comparison, with
+  the bitrate ladder when it was computed, or for a lossless verification.
+  One self-contained file: charts are inline SVG that follow the reader's
+  light or dark theme, the noise-to-mask map is an embedded PNG, and there is
+  no script and no external resource. Written in the interface language.
+- Reports are shareable by default: files appear by name and a content hash,
+  never by path, and user and computer names are removed. A privacy audit runs
+  before writing, and a report that still contains a trace is not written.
+  Text from files and tags is escaped, so it cannot inject HTML.
+
+### Fixed
+- The privacy audit took the "s:/" in "https://" for a drive path, so any
+  report with a link would have been refused.
 - **Encode tab**: pick a source, a codec (Opus, AAC, AAC via Media Foundation,
   MP3, Vorbis, AC-3, E-AC-3, MP2, WMA, FLAC, ALAC, WavPack), a bitrate or a
   quality level and codec-specific options, and encode. Codecs missing from
