@@ -61,13 +61,23 @@ def comparison_headline(result: ComparisonResult) -> Headline:
         else:
             title = tr("headline.snr", snr=snr)
             tone = "neutral"
+        detail = tr(f"verdict.{plan.verdict}")
         if plan.verdict == "different_master":
             tone = "warn"
-        return Headline(title, tr(f"verdict.{plan.verdict}"), tone)
+        if result.excluded_s > 0:
+            # Sonuc dosyanin yalnizca bir kismi icin: okuyucu bunu basliktan gormeli.
+            tone = "warn"
+            detail = tr("headline.partial", excluded=result.excluded_s)
+        return Headline(title, detail, tone)
     key = "verdict.not_measured" if result.status == "not_measured" else f"verdict.{plan.verdict}"
-    detail = localize(plan.reasons[-1]) if plan.reasons else ""
-    if not detail and result.notes:
+    # Olculmediyse asil sebep boru hattinin notudur (orn. dosyalar surekli
+    # degil); plan gerekcesi ancak o yoksa gosterilir.
+    if result.status == "not_measured" and result.notes:
         detail = localize(result.notes[-1])
+    else:
+        detail = localize(plan.reasons[-1]) if plan.reasons else ""
+        if not detail and result.notes:
+            detail = localize(result.notes[-1])
     tone = "bad" if plan.verdict in ("different_recording", "unaligned") else "warn"
     return Headline(tr(key), detail, tone)
 
@@ -117,7 +127,13 @@ def summary_rows(result: ComparisonResult) -> list[tuple[str, str]]:
         rows.append(
             (
                 tr("summary.duration"),
-                tr("value.seconds", seconds=result.samples / result.analysis_rate),
+                tr("value.seconds", seconds=result.samples / result.analysis_rate)
+                if result.excluded_s <= 0
+                else tr(
+                    "value.seconds_partial",
+                    seconds=result.samples / result.analysis_rate,
+                    excluded=result.excluded_s,
+                ),
             )
         )
     return rows

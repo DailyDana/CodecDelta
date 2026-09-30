@@ -20,6 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
+from typing import Protocol
 
 import numpy as np
 
@@ -56,6 +57,15 @@ BAND_EDGES_HZ: tuple[float, ...] = (
     24000.0,
 )
 BROADBAND_HZ = (20.0, 20000.0)
+
+# Hizalama denetimi blok uzunlugu (s) ve PHAT tepesinin sifirdan en fazla
+# uzakligi (ornek). Cerceveler zaten hizali oldugu icin tepe sifirdadir;
+# +-2 kesirli artiga ve pencere etkisine pay birakir.
+_GATE_BLOCK_S = 1.0
+_GATE_MAX_LAG = 2
+# Olcume katilan blok orani bunun altindaysa sonuc olculmemis sayilir: plan
+# gecikmesi dosyanin cogunluguna ait degil.
+_GATE_MIN_KEPT = 0.5
 
 # Raporlanan en ust frekans, Nyquist'in kesri olarak (bkz. `compare`).
 NYQUIST_FRACTION = 0.99
@@ -133,6 +143,12 @@ def _mid_side(
     return (left + right) * 0.5, (left - right) * 0.5
 
 
+class _Sink(Protocol):
+    """Gecislerin spektrum ciftlerini verdigi hedef."""
+
+    def add(self, a: np.ndarray, b: np.ndarray) -> None: ...
+
+
 class _Fanout:
     """Ayni spektrum ciftini birden fazla biriktiriciye dagitir.
 
@@ -145,6 +161,137 @@ class _Fanout:
     def add(self, a: np.ndarray, b: np.ndarray) -> None:
         for sink in self.sinks:
             sink.add(a, b)
+
+
+class _BlockGate:
+    """Ana gecisin spektrumlarini ~1 s'lik bloklar halinde denetleyip iletir.
+
+    Hizalama plani gecikmeyi birkac pencereden olcer; dosyanin geri kalaninin
+    AYNI gecikmeyle hizali oldugu varsayilir. Duzenlenmis bir dosyada (ortadan
+    kesilmis, sonu degistirilmis) bu varsayim bozulur ve hizasiz bolumler
+    codec gurultusu diye olculur: gercek 21.7 dB, kesik dosyada 0.7-3.0 dB,
+    cogu zaman uyarisiz (denetim D1).
+
+    Her blokta mid capraz spektrumunun PHAT tepesi bulunur. Hizali bir blokta
+    tepe sifir gecikmededir (cerceveler zaten hizali); hizasiz bir blokta
+    rastgele bir yere duser. Korelasyon DEGIL tepe konumu kullaniliyor: codec
+    gurultusu yuksek ama hizali bir blok (sessiz pasaj, dusuk bitrate) dusuk
+    korelasyon verir ve atilirsa S/N oldugundan iyi gorunurdu; PHAT tepesinin
+    YERI ise dusuk S/N'de de dogru kalir.
+
+    Hizasiz bloklar olcume katilmaz ve sayilir; side ayni karari paylasir.
+
+    Sinir bloklari: kesimin tam ustune dusen blok yari hizalidir ve PHAT tepesi
+    yine sifirda cikar. Birkac saniyelik ilgisiz ses bile S/N'i cok bozar
+    (olculen: son 13 s'si degistirilmis dosyada 2 s'lik bloklarla 12.05 yerine
+    6.94 dB). Bu yuzden hizasiz her bolgenin iki yanindaki birer blok da
+    atilir (tutulan kumenin bir blok asinmasi): blok i ancak i-1, i ve i+1
+    hizaliysa olcume girer. Bedeli kesim basina ~2 s iyi ses.
+    """
+
+    def __init__(
+        self,
+        mid: _Fanout,
+        side: _Fanout | None,
+        *,
+        fft_size: int,
+        frames_per_block: int,
+    ) -> None:
+        self._mid, self._side = mid, side
+        self._fft_size = fft_size
+        self._block = frames_per_block
+        self._mid_buf: list[tuple[np.ndarray, np.ndarray]] = []
+        self._side_buf: list[tuple[np.ndarray, np.ndarray]] = []
+        self.kept_frames = 0
+        self.dropped_frames = 0
+        # Bir blok gecikmeli karar: (mid, side, kendi karari, oncekinin karari)
+        self._held: (
+            tuple[tuple[np.ndarray, np.ndarray], tuple[np.ndarray, np.ndarray] | None, bool, bool]
+            | None
+        ) = None
+        self._last_decision = True
+        self.mid = _GateInput(self, is_side=False)
+        self.side = _GateInput(self, is_side=True) if side is not None else None
+
+    @staticmethod
+    def _count(buf: list[tuple[np.ndarray, np.ndarray]]) -> int:
+        return sum(a.shape[0] for a, _ in buf)
+
+    @staticmethod
+    def _take(buf: list[tuple[np.ndarray, np.ndarray]], n: int) -> tuple[np.ndarray, np.ndarray]:
+        a = np.concatenate([x for x, _ in buf])
+        b = np.concatenate([y for _, y in buf])
+        buf.clear()
+        if a.shape[0] > n:
+            buf.append((a[n:], b[n:]))
+        return a[:n], b[:n]
+
+    def push(self, a: np.ndarray, b: np.ndarray, *, is_side: bool) -> None:
+        (self._side_buf if is_side else self._mid_buf).append((a, b))
+        self._flush(self._block)
+
+    def _flush(self, need: int) -> None:
+        while self._count(self._mid_buf) >= need and (
+            self._side is None or self._count(self._side_buf) >= need
+        ):
+            mid_block = self._take(self._mid_buf, need)
+            side_block = self._take(self._side_buf, need) if self._side is not None else None
+            decision = self._aligned(*mid_block)
+            self._release(next_decision=decision)
+            self._held = (mid_block, side_block, decision, self._last_decision)
+            self._last_decision = decision
+
+    def _release(self, *, next_decision: bool) -> None:
+        """Bekleyen blogu, iki komsusunun karari da bilindiginde iletir ya da atar."""
+        if self._held is None:
+            return
+        (mid_a, mid_b), side_block, own, previous = self._held
+        self._held = None
+        frames = mid_a.shape[0]
+        if own and previous and next_decision:
+            self._mid.add(mid_a, mid_b)
+            if self._side is not None and side_block is not None:
+                self._side.add(*side_block)
+            self.kept_frames += frames
+        else:
+            self.dropped_frames += frames
+
+    def finish(self) -> None:
+        """Son eksik blogu da karara baglar."""
+        remaining = self._count(self._mid_buf)
+        if self._side is not None:
+            remaining = min(remaining, self._count(self._side_buf))
+        if remaining:
+            self._flush(remaining)
+        # Dosya sonu bir kesim degildir: son blok yalnizca kendi ve oncekinin
+        # kararina gore degerlendirilir.
+        self._release(next_decision=True)
+
+    def _aligned(self, a: np.ndarray, b: np.ndarray) -> bool:
+        cross = np.sum(np.conj(a) * b, axis=0)
+        magnitude = np.abs(cross)
+        peak = float(magnitude.max()) if magnitude.size else 0.0
+        power = float(np.sum(np.abs(a) ** 2)) * float(np.sum(np.abs(b) ** 2))
+        if peak <= 0.0 or power <= 0.0:
+            # Sessizlik ya da tek tarafli sessizlik (dropout): hizalama
+            # yargilanamaz, blok tutulur -- dropout gercek bir farktir.
+            return True
+        whitened = cross / np.maximum(magnitude, 1e-12 * peak)
+        correlation = np.fft.irfft(whitened, self._fft_size)
+        index = int(np.argmax(correlation))
+        lag = index if index <= self._fft_size // 2 else index - self._fft_size
+        return abs(lag) <= _GATE_MAX_LAG
+
+
+class _GateInput:
+    """Gecislerin bekledigi `add(a, b)` arayuzunu kapiya baglar."""
+
+    def __init__(self, gate: _BlockGate, *, is_side: bool) -> None:
+        self._gate, self._is_side = gate, is_side
+
+    def add(self, a: np.ndarray, b: np.ndarray) -> None:
+        if a.shape[0]:
+            self._gate.push(a, b, is_side=self._is_side)
 
 
 class _Buffer:
@@ -285,18 +432,50 @@ def compare(
         gain=plan_gain,
         expected_frames=int(test_env.duration_s * rate) // (fft_size // 2),
     )
-    samples = measure(
+    gate = _BlockGate(
+        _Fanout(mid, nmr),
+        _Fanout(side) if side is not None else None,
+        fft_size=fft_size,
+        frames_per_block=max(8, round(_GATE_BLOCK_S * rate / (fft_size // 2))),
+    )
+    measure(
         ffmpeg,
         ref_source,
         test_source,
         model,
         alignment.channel_map,
-        _Fanout(mid, nmr),
-        _Fanout(side) if side is not None else None,
+        gate.mid,
+        gate.side,
         fft_size=fft_size,
         resample=resample,
         cancel=cancel,
     )
+    gate.finish()
+    hop = fft_size // 2
+    samples = gate.kept_frames * hop
+    excluded_s = gate.dropped_frames * hop / rate
+    total_frames = gate.kept_frames + gate.dropped_frames
+    if total_frames and gate.kept_frames < _GATE_MIN_KEPT * total_frames:
+        notes.append(
+            Message(
+                "compare.mostly_misaligned",
+                "only {kept:.0f} s of {total:.0f} s line up with the reference at the planned "
+                "delay: the files are not a continuous copy of each other",
+                kept=gate.kept_frames * hop / rate,
+                total=total_frames * hop / rate,
+            )
+        )
+        return _not_measured(reference, test, alignment, rate, status="not_measured", notes=notes)
+    if excluded_s > 0:
+        notes.append(
+            Message(
+                "compare.excluded",
+                "{excluded:.1f} s of {total:.1f} s did not line up with the reference (an edit, a "
+                "cut or a different ending) and were left out of the measurement",
+                excluded=excluded_s,
+                total=total_frames * hop / rate,
+            )
+        )
     if mid.frames < 2:
         notes.append(Message("compare.short_overlap", "overlap too short to measure"))
         return _not_measured(reference, test, alignment, rate, status="not_measured", notes=notes)
@@ -357,6 +536,7 @@ def compare(
         polarity=-1 if gain < 0 else 1,
         frames=mid.frames,
         samples=samples,
+        excluded_s=excluded_s,
         nmr=nmr.summary(),
         notes=tuple(notes),
     )
@@ -383,8 +563,8 @@ def _main_pass(
     test_source: Source,
     model: DelayModel,
     channel_map: tuple[int, ...],
-    mid: _Fanout,
-    side: _Fanout | None,
+    mid: _Sink,
+    side: _Sink | None,
     *,
     fft_size: int,
     resample: ResampleCfg,
@@ -463,8 +643,8 @@ def _tracked_pass(
     test_source: Source,
     model: DelayModel,
     channel_map: tuple[int, ...],
-    mid: _Fanout,
-    side: _Fanout | None,
+    mid: _Sink,
+    side: _Sink | None,
     *,
     fft_size: int,
     resample: ResampleCfg,

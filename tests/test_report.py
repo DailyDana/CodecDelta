@@ -27,6 +27,7 @@ from app.core.messages import Message
 from app.core.probe import probe
 from app.report import html, png, svg_chart
 from app.single import verdict
+from app.ui import present
 from app.ui.i18n import set_language
 
 
@@ -219,3 +220,15 @@ def test_verification_report_shows_the_spectrum_and_evidence(
     assert 'class="for"' in text and "brickwall" in text
     assert "content stops" in text  # grafikteki isaret
     assert html.check_privacy(text) == []
+
+
+@pytest.mark.needs_ffmpeg
+def test_a_partial_measurement_is_flagged(comparison: ComparisonResult) -> None:
+    """Hizasiz kisim disarida birakildiysa baslik uyari tonunda ve sure gorunur (D1)."""
+    partial = dataclasses.replace(comparison, excluded_s=12.0)
+    headline = present.comparison_headline(partial)
+    assert headline.tone == "warn" and "12 s" in headline.detail
+    rows = dict(present.summary_rows(partial))
+    assert any("12 s left out" in value for value in rows.values())
+    set_language("tr")
+    assert "12 s dışarıda" in html.render_comparison(partial)

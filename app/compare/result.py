@@ -75,6 +75,9 @@ class ComparisonResult:
     # STFT cercevesi ve ortusen ornek sayisi (analiz hizinda).
     frames: int = 0
     samples: int = 0
+    # Hizasiz oldugu icin olcume KATILMAYAN sure (s): duzenlenmis dosya, kesik,
+    # farkli kapanis. Sifirdan buyukse sonuc yalnizca kalan kisim icindir.
+    excluded_s: float = 0.0
     # Gurultu/maske orani ozeti; olculmediyse None.
     nmr: NmrSummary | None = None
     notes: tuple[str, ...] = ()

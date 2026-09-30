@@ -325,7 +325,11 @@ def build(
         points.append(
             _Point(position_s, coarse + lag.lag + fine.delay, lag, fine, ref_block, test_block)
         )
-        if not tracking:
+        # Sabit gecikmede "tamam" bir pencerede dur; "zayif" bir pencereyle
+        # yetinme. Duzenlenmis bir dosyada pencerelerden biri kesime denk gelip
+        # zayif cikabilir; ilk kullanilabilir pencerede durmak tum dosyayi
+        # "farkli master" yapiyordu (denetim D1).
+        if not tracking and fine.status == "ok":
             break
 
     if not points:
@@ -344,7 +348,7 @@ def build(
                 count=len(track),
             )
         )
-    point = best if tracking else points[0]
+    point = best if tracking else next((p for p in points if p.fine.status == "ok"), points[0])
     lag, fine = point.lag, point.fine
     a, b = gccphat.aligned_slices(to_mono(point.ref), to_mono(point.test), lag.lag)
     shifted = fractional_shift(a, fine.delay)

@@ -789,3 +789,24 @@ bilmiyor.
   sarti eklendi.
 - Grafikte gorunmeyen seri lejantta da yok (taban cogu zaman 90-150 dB,
   gorunur araligin disinda; degeri tabloda).
+
+## Denetim duzeltmeleri (Eylul 2026)
+
+Bulgular ve durumlari: `docs/AUDIT-2026-09.md`.
+
+- **D1 -- blok kapisi.** Plan gecikmeyi birkac pencereden olcuyor ve dosyanin
+  geri kalaninin ayni gecikmeyle hizali oldugunu varsayiyordu; duzenlenmis bir
+  dosyada hizasiz bolum codec gurultusu diye olculuyordu. Ana gecis artik 1 s'lik
+  bloklarin her birinde mid capraz spektrumunun PHAT tepesine bakiyor: tepe
+  sifirdan +-2 ornekten uzaksa blok olcume girmiyor. Korelasyon degil tepe
+  KONUMU: hizali ama gurultulu blok (sessiz pasaj, dusuk bitrate) dusuk
+  korelasyon verir, atilsaydi S/N oldugundan iyi gorunurdu.
+- Kesimin ustune dusen blok yari hizali ve tepe yine sifirda cikiyor; birkac
+  saniyelik ilgisiz ses bile manseti bozuyordu (2 s'lik bloklarla 12.05 yerine
+  6.94 dB). Hizasiz her bolgenin iki yanindaki birer blok da atiliyor.
+- Bloklarin yarisindan azi tutulursa sonuc olculmemis sayiliyor: plan gecikmesi
+  dosyanin cogunluguna ait degil, "kalan kisim" okuyucuyu yaniltir.
+- Plan sabit gecikmede ilk kullanilabilir pencerede degil ilk "tamam" pencerede
+  duruyor; kesime denk gelen pencere tum dosyayi "farkli master" yapiyordu.
+- Olculen: sentetik (gercek 12.05 dB) son 13 s farkli 12.08, 45-47 s kesik
+  muzik 21.95 (gercek 21.69). Gercek Loreena cifti degismedi (25.62 dB).

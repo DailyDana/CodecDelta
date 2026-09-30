@@ -13,9 +13,10 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import numpy as np
 import pytest
 
-from app.compare.pipeline import band_layout, compare, open_track
+from app.compare.pipeline import _BlockGate, band_layout, compare, open_track
 from app.compare.result import ComparisonResult, ComparisonSet
 from app.core.ffmpeg_locate import FFmpegTools
 
@@ -243,3 +244,150 @@ def test_drift_does_not_change_the_codec_measurement(
     drifted = _run(ffmpeg_tools, files["ref"], files["drift_opus"])
     assert drifted.status == "measured", drifted.notes
     assert drifted.headline_snr_db == pytest.approx(plain.headline_snr_db, abs=1.0)
+
+
+# -- duzenlenmis dosyalar (denetim D1) --------------------------------------------
+
+
+class _Collect:
+    def __init__(self) -> None:
+        self.frames = 0
+
+    def add(self, a: np.ndarray, b: np.ndarray) -> None:
+        self.frames += a.shape[0]
+
+
+def test_block_gate_drops_misaligned_blocks_and_their_neighbours() -> None:
+    """Hizasiz blok ve iki komsusu atilir; dosya sonu kesim sayilmaz."""
+    fft_size, per_block = 64, 4
+    rng = np.random.default_rng(5)
+    bins = np.arange(fft_size // 2 + 1)
+    sink = _Collect()
+    gate = _BlockGate(sink, None, fft_size=fft_size, frames_per_block=per_block)  # type: ignore[arg-type]
+    for aligned in (True, True, False, True, True, True):
+        a = rng.normal(size=(per_block, bins.size)) + 1j * rng.normal(size=(per_block, bins.size))
+        b = a if aligned else a * np.exp(-2j * np.pi * bins * 20 / fft_size)
+        gate.mid.add(a, b)
+    gate.finish()
+    # 0 tutulur; 1, 2, 3 atilir (2 hizasiz, 1 ve 3 komsusu); 4 ve 5 tutulur
+    assert gate.kept_frames == sink.frames == 3 * per_block
+    assert gate.dropped_frames == 3 * per_block
+
+
+# Zarfi periyodik OLMAYAN kaynak: pembe gurultu, yavas degisen kahverengi
+# gurultuyle genlik modulasyonu. Tremolo (1.1 Hz) zarfi periyodiktir ve kuyrugu
+# degistirilmis dosyada zarf eslestirmesi kuyrugu disarida birakan bir periyot
+# katina (-17.27 s) kilitleniyordu; gercek muzikte olmayan sentetik bir tuzak.
+EDITED_SOURCE = (
+    "anoisesrc=color=pink:sample_rate=44100:duration=40:seed=21[n];"
+    "anoisesrc=color=brown:sample_rate=44100:duration=40:seed=4,lowpass=f=4,lowpass=f=4,"
+    r"aeval='0.1+min(0.7\,abs(val(0))*40)'[e];[n][e]amultiply,aformat=channel_layouts=stereo"
+)
+
+
+def _opus(ffmpeg: Path, source: Path, out: Path, graph: str | None = None) -> Path:
+    args = ["-filter_complex", graph] if graph else []
+    subprocess.run(
+        [
+            str(ffmpeg),
+            "-y",
+            "-v",
+            "error",
+            "-i",
+            str(source),
+            *args,
+            "-c:a",
+            "libopus",
+            "-b:a",
+            "128k",
+            str(out),
+        ],
+        check=True,
+    )
+    return out
+
+
+def _spliced(ffmpeg: Path, reference: Path, out: Path, keep_s: float) -> Path:
+    """Referansin ilk `keep_s` saniyesi + ilgisiz gurultu (toplam 40 s)."""
+    other = f"anoisesrc=color=pink:sample_rate=44100:duration={40 - keep_s}:seed=77,volume=0.4"
+    return _opus(
+        ffmpeg,
+        reference,
+        out,
+        f"[0:a]atrim=0:{keep_s},asetpts=PTS-STARTPTS[x];{other},"
+        "aformat=channel_layouts=stereo[y];[x][y]concat=n=2:v=0:a=1",
+    )
+
+
+@pytest.fixture(scope="module")
+def edited(ffmpeg_tools: FFmpegTools, tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
+    root = tmp_path_factory.mktemp("edited")
+    ff = ffmpeg_tools.ffmpeg
+    reference = root / "ref.flac"
+    subprocess.run(
+        [
+            str(ff),
+            "-y",
+            "-v",
+            "error",
+            "-filter_complex",
+            EDITED_SOURCE,
+            "-c:a",
+            "flac",
+            str(reference),
+        ],
+        check=True,
+    )
+    return {
+        "ref": reference,
+        "full": _opus(ff, reference, root / "full.opus"),
+        "ending": _spliced(ff, reference, root / "ending.opus", 30),
+        "mostly": _spliced(ff, reference, root / "mostly.opus", 12),
+        # Ortadan 2 s kesilmis (duzenlenmis) kopya: denetimdeki asil senaryo
+        "cut": _opus(
+            ff,
+            reference,
+            root / "cut.opus",
+            "[0:a]atrim=0:28,asetpts=PTS-STARTPTS[x];[0:a]atrim=30,asetpts=PTS-STARTPTS[y];"
+            "[x][y]concat=n=2:v=0:a=1",
+        ),
+    }
+
+
+@pytest.mark.needs_ffmpeg
+def test_a_different_ending_is_left_out_of_the_measurement(
+    ffmpeg_tools: FFmpegTools, edited: dict[str, Path]
+) -> None:
+    """Sonu degistirilmis dosya: hizasiz kisim olcume girmemeli.
+
+    Kapi yokken hizasiz 10 s codec gurultusu sayiliyordu ve manset gercek
+    degerin cok altina dusuyordu (denetim D1).
+    """
+    whole = _run(ffmpeg_tools, edited["ref"], edited["full"])
+    result = _run(ffmpeg_tools, edited["ref"], edited["ending"])
+    assert result.status == "measured", result.notes
+    assert whole.excluded_s == 0.0
+    assert 9.0 < result.excluded_s < 13.5
+    assert result.headline_snr_db == pytest.approx(whole.headline_snr_db, abs=1.0)
+    assert any(getattr(n, "key", "") == "compare.excluded" for n in result.notes)
+
+
+@pytest.mark.needs_ffmpeg
+def test_a_cut_in_the_middle_is_left_out_of_the_measurement(
+    ffmpeg_tools: FFmpegTools, edited: dict[str, Path]
+) -> None:
+    """Ortadan kesilmis dosya: kesimden sonrasi planlanan gecikmede hizali degil."""
+    whole = _run(ffmpeg_tools, edited["ref"], edited["full"])
+    result = _run(ffmpeg_tools, edited["ref"], edited["cut"])
+    assert result.status == "measured", result.notes
+    assert 8.0 < result.excluded_s < 14.0
+    assert result.headline_snr_db == pytest.approx(whole.headline_snr_db, abs=1.0)
+
+
+@pytest.mark.needs_ffmpeg
+def test_a_mostly_different_file_is_not_measured(
+    ffmpeg_tools: FFmpegTools, edited: dict[str, Path]
+) -> None:
+    result = _run(ffmpeg_tools, edited["ref"], edited["mostly"])
+    assert result.status != "measured"
+    assert math.isnan(result.headline_snr_db) or result.broadband is None
