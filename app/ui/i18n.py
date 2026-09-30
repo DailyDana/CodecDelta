@@ -309,6 +309,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "msg.compare.untracked": "saat kayması izlenemedi: hizalı nokta çok az",
         "msg.compare.tracked": "saat kayması izlendi: {ppm:+.2f} ppm, doğrudan en büyük sapma {residual:.3f} örnek",
         "msg.compare.short_overlap": "ölçmek için örtüşme çok kısa",
+        "msg.single.upsampled": "{khz:.1f} kHz'te dik duvar, {rate:g} kHz'in Nyquist'i: dosya {rate:g} kHz'ten büyütülmüş görünüyor",
+        "msg.single.rejudged": "{file:g} kHz'lik dosyada {khz:.1f} kHz'in üstünde içerik yok: {rate:g} kHz'te değerlendirildi",
         "msg.compare.multichannel": "{channels} kanal: mid tüm kanalların ortalaması, side ön sol eksi ön sağ",
         "msg.compare.excluded": "{total:.1f} s'nin {excluded:.1f} s'si referansla hizalanmadı (bir düzenleme, kesim ya da farklı kapanış) ve ölçümün dışında bırakıldı",
         "msg.compare.mostly_misaligned": "planlanan gecikmede {total:.0f} s'nin yalnızca {kept:.0f} s'si referansla hizalanıyor: dosyalar birbirinin kesintisiz bir kopyası değil",

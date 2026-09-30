@@ -273,6 +273,39 @@ def combine(reasons: list[str], counter: list[str], notes: list[str]) -> Bucket:
     return "undetermined"
 
 
+def _rejudge_rate(evidence: SpectralEvidence) -> int | None:
+    """Yuksek hizli dosyanin yargilanacagi standart hiz, ya da None.
+
+    Duvar bir standart hizin Nyquist'indeyse dosya o hizdan buyutulmustur ve
+    o hizda yargilanir. Degilse ve icerik 48 kHz'e sigiyorsa 48 kHz: 44.1'e
+    indirmek 48 kHz kaynakli uc kayipli dosyayi "belirsiz"e cekti (olculen,
+    D:/music 231 dosya).
+    """
+    # Esikler 44.1 ve 48 kHz'te olculdu; bu hizlarda dosya oldugu gibi yargilanir.
+    widest = max(thresholds.REJUDGE_RATES)
+    if evidence.frames < thresholds.MIN_ACTIVE_FRAMES or evidence.sample_rate <= widest:
+        return None
+    source = _upsampled_from(evidence)
+    if source is not None:
+        return source
+    if evidence.cutoff_median_hz < thresholds.REJUDGE_NYQUIST_FRACTION * widest / 2:
+        return widest
+    return None
+
+
+def _upsampled_from(evidence: SpectralEvidence) -> int | None:
+    """Diz bir standart hizin Nyquist'indeki dik duvarsa o hiz."""
+    drop = evidence.knee_drop_db
+    if math.isnan(drop) or drop <= thresholds.BRICKWALL_DROP_DB:
+        return None
+    for rate in thresholds.REJUDGE_RATES:
+        if rate < evidence.sample_rate and (
+            abs(evidence.knee_hz / (rate / 2) - 1.0) <= thresholds.UPSAMPLED_KNEE_TOLERANCE
+        ):
+            return rate
+    return None
+
+
 def verify(
     ffmpeg: Path,
     info: Probe,
@@ -291,17 +324,47 @@ def verify(
     if info.duration is not None and info.duration > excerpt_s / (1.0 - 2 * _SKIP_EDGE_FRACTION):
         start = max(_SKIP_EDGE_FRACTION * info.duration, info.duration / 2.0 - excerpt_s / 2.0)
         duration = excerpt_s
-    evidence = spectral.analyse(
-        ffmpeg,
-        info.path,
-        sample_rate=stream.sample_rate,
-        channels=stream.channels,
-        stream_index=stream_index,
-        start=start,
-        duration=duration,
-        cancel=cancel,
-    )
+
+    def analyse(rate: int | None = None) -> SpectralEvidence:
+        return spectral.analyse(
+            ffmpeg,
+            info.path,
+            sample_rate=stream.sample_rate,
+            channels=stream.channels,
+            stream_index=stream_index,
+            start=start,
+            duration=duration,
+            rate=rate,
+            cancel=cancel,
+        )
+
+    evidence = analyse()
+    rate_notes: list[str] = []
+    rejudge = _rejudge_rate(evidence)
+    if rejudge is not None:
+        source = _upsampled_from(evidence)
+        if source is not None:
+            rate_notes.append(
+                Message(
+                    "single.upsampled",
+                    "steep wall at {khz:.1f} kHz, the Nyquist of {rate:g} kHz: the file appears "
+                    "upsampled from {rate:g} kHz",
+                    khz=evidence.knee_hz / 1000,
+                    rate=source / 1000,
+                )
+            )
+        rate_notes.append(
+            Message(
+                "single.rejudged",
+                "no content above {khz:.1f} kHz in a {file:g} kHz file: judged at {rate:g} kHz",
+                khz=evidence.cutoff_median_hz / 1000,
+                file=stream.sample_rate / 1000,
+                rate=rejudge / 1000,
+            )
+        )
+        evidence = analyse(rejudge)
     reasons, counter, notes = judge_spectral(evidence)
+    notes = rate_notes + notes
     flac_info = flac_bitstream.scan(info.path) if stream.codec == "flac" else None
     notes += judge_container(info, flac_info)
     bucket = combine(reasons, counter, notes)

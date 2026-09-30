@@ -818,3 +818,13 @@ Bulgular ve durumlari: `docs/AUDIT-2026-09.md`.
   rapora hangi kanalin olculdugunu soyleyen bir not dusuluyor. Dogrulama:
   merkez-yalniz AC-3 448k 50.42 dB; ayni merkez kanali mono cikarilip
   karsilastirilinca da 50.42 dB.
+- **D3 -- buyutulmus dosya kaynak hizinda yargilanir.** 48 kHz'in ustundeki
+  dosyada icerik standart bir hizin Nyquist'ine sigiyorsa kanit o hizda yeniden
+  cikariliyor: duvar 22.05/24 kHz'teyse o hiz ("buyutulmus gorunuyor" notuyla),
+  degilse 48 kHz. Esikler 44.1/48 kHz'te olculdu; 96 kHz'te kesim medyani bin
+  cozunurlugu yuzunden ~240 Hz dusuyor ve 22.05 kHz'teki resampler duvari codec
+  duvari saniliyordu. Yeniden orneklenmis analizde diz, taban ve kesim soxr gecis
+  bandinin altinda (0.985 Nyquist) araniyor; aksi halde kendi resampler'imizin
+  duvari gercek dizi golgeliyordu. Dogrulama (D:/music, 231 dosya, 21 gercek):
+  96 kHz'e buyutulmus her dosya dogal hizdaki hukmunu aliyor (21/21 gercek
+  kayipsiz); 88.2/176.4/192 kHz'te 7 dosyalik ornek ayni.

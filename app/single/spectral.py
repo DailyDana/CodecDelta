@@ -50,6 +50,11 @@ _FRAME_CUTOFF_DROP_DB = 55.0
 # Sessiz cerceveler (referans bandi bu dBFS/bin altinda) sayilmaz.
 _SILENT_FRAME_DB = -80.0
 _SMOOTH_BINS = 5
+# Yeniden orneklenmis analizde bunun ustu (Nyquist kesri) kullanilmaz: soxr
+# `cutoff=0.99` gecis bandi 0.99'da basliyor ve kendi dik duvari diz aramasinda
+# gercek dizi golgeliyordu (96 kHz'e buyutulmus MP3 V0'da 21.3 kHz'teki yumusak
+# diz yerine 21.8 kHz'teki resampler duvari secildi).
+_RESAMPLED_TOP_FRACTION = 0.985
 
 
 @dataclass(frozen=True)
@@ -89,8 +94,18 @@ def _smooth(rows: np.ndarray, width: int) -> np.ndarray:
     return result
 
 
-def analyse_samples(mid: np.ndarray, side: np.ndarray | None, sample_rate: int) -> SpectralEvidence:
-    """Ham (native hizda) mid/side orneklerinden kanit cikarir."""
+def analyse_samples(
+    mid: np.ndarray,
+    side: np.ndarray | None,
+    sample_rate: int,
+    *,
+    top_hz: float | None = None,
+) -> SpectralEvidence:
+    """Ham mid/side orneklerinden kanit cikarir.
+
+    `top_hz`: bunun ustundeki spektrum dosyaya degil araya giren resampler'a
+    aittir; diz, taban ve cerceve kesimi bu sinirin altinda aranir.
+    """
     stft = StreamingStft(FFT_SIZE)
     spectra = stft.push(mid.astype(np.float64))
     scale = 4.0 / (FFT_SIZE * float(np.sum(hann(FFT_SIZE) ** 2)))
@@ -128,6 +143,8 @@ def analyse_samples(mid: np.ndarray, side: np.ndarray | None, sample_rate: int) 
     drop_bins = max(2, round(_DROP_WINDOW_HZ / bin_hz))
     start = int(np.searchsorted(smooth_freqs, _KNEE_SEARCH_FROM_HZ))
     stop = smooth_freqs.size - drop_bins
+    if top_hz is not None:
+        stop = min(stop, int(np.searchsorted(smooth_freqs, top_hz, side="right")) - drop_bins)
     if stop <= start:
         return empty
     drops = smooth[start + drop_bins : stop + drop_bins] - smooth[start:stop]
@@ -138,6 +155,8 @@ def analyse_samples(mid: np.ndarray, side: np.ndarray | None, sample_rate: int) 
     # -- diz sonrasi taban ---------------------------------------------------
     floor_lo = knee_hz + _FLOOR_GAP_HZ
     floor_hi = _FLOOR_TOP_FRACTION * sample_rate / 2.0
+    if top_hz is not None:
+        floor_hi = min(floor_hi, top_hz)
     floor_band = (freqs >= floor_lo) & (freqs <= floor_hi)
     floor_rel = float(rel[floor_band].mean()) if floor_band.sum() >= 4 else math.nan
 
@@ -145,6 +164,8 @@ def analyse_samples(mid: np.ndarray, side: np.ndarray | None, sample_rate: int) 
     frame_db = _smooth(10.0 * np.log10(np.maximum(power, 1e-30)), _SMOOTH_BINS)
     frame_freqs = smooth_freqs
     limit = frame_freqs.size - drop_bins  # en ust pencere disarida
+    if top_hz is not None:
+        limit = min(limit, int(np.searchsorted(frame_freqs, top_hz, side="right")))
     cutoffs = np.empty(frame_db.shape[0])
     for i, row in enumerate(frame_db):
         above = np.nonzero(row[:limit] > frame_ref_db[i] - _FRAME_CUTOFF_DROP_DB)[0]
@@ -187,9 +208,17 @@ def analyse(
     stream_index: int = 0,
     start: float | None = None,
     duration: float | None = None,
+    rate: int | None = None,
     cancel: CancelToken | None = None,
 ) -> SpectralEvidence:
-    """Dosyanin bir kesitini native hizda cozup kanit cikarir."""
+    """Dosyanin bir kesitini cozup kanit cikarir.
+
+    Varsayilan native hiz: resampler'in kendi kesimi olcumu kirletir. `rate`
+    yalnizca icerigin zaten o hizin Nyquist'inin altinda bittigi bilinen
+    durumda verilir (bkz. `verdict.verify`).
+    """
+    if rate is not None:
+        sample_rate = rate
     blocks = []
     with open_pcm(
         ffmpeg,
@@ -197,6 +226,7 @@ def analyse(
         sample_rate=sample_rate,
         channels=channels,
         stream_index=stream_index,
+        rate=rate,
         start=start,
         duration=duration,
         cancel=cancel,
@@ -205,10 +235,11 @@ def analyse(
             blocks.append(block.astype(np.float64))
     if not blocks:
         return analyse_samples(np.zeros(0), None, sample_rate)
+    top_hz = _RESAMPLED_TOP_FRACTION * sample_rate / 2.0 if rate is not None else None
     pcm = np.concatenate(blocks)
     if pcm.shape[1] >= 2:
         mid = (pcm[:, 0] + pcm[:, 1]) * 0.5
         side: np.ndarray | None = (pcm[:, 0] - pcm[:, 1]) * 0.5
     else:
         mid, side = pcm[:, 0], None
-    return analyse_samples(mid, side, sample_rate)
+    return analyse_samples(mid, side, sample_rate, top_hz=top_hz)

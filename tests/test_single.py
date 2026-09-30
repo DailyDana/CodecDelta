@@ -239,3 +239,105 @@ def test_end_to_end_transcode_and_clean_file(ffmpeg_tools: FFmpegTools, tmp_path
 
     mp3_verdict = verdict.verify(ffmpeg_tools.ffmpeg, probe(ffmpeg_tools.ffprobe, lossy))
     assert mp3_verdict.bucket == "not_applicable"
+
+
+def _cd_like(seconds: int = SECONDS) -> np.ndarray:
+    """Gercek CD'ye benzer: 12 kHz'ten sonra yumusak dogal inis (~2.7 dB/500 Hz).
+
+    Kare basina kesim bu yuzden 20.5 kHz civarinda kalir; gercek CD'lerde
+    olculen 20.87-21.2 kHz'e yakin.
+    """
+    x = pink(7, seconds)
+    f = freqs_of(x)
+    return shape(x, np.where(f > 12_000, -5.4 * (f - 12_000) / 1000, 0.0))
+
+
+def _flac(ffmpeg: Path, x: np.ndarray, out: Path, rate: int | None = None) -> Path:
+    resample = (
+        ["-af", f"aformat=sample_fmts=dbl,aresample={rate}:resampler=soxr:precision=28:cutoff=0.99"]
+        if rate
+        else []
+    )
+    subprocess.run(
+        [
+            str(ffmpeg),
+            "-v",
+            "error",
+            "-f",
+            "f32le",
+            "-ar",
+            str(RATE),
+            "-ac",
+            "1",
+            "-i",
+            "-",
+            *resample,
+            "-sample_fmt",
+            "s32",
+            "-c:a",
+            "flac",
+            str(out),
+        ],
+        input=x.astype("<f4").tobytes(),
+        check=True,
+    )
+    return out
+
+
+@pytest.mark.needs_ffmpeg
+def test_an_upsampled_cd_is_judged_at_its_source_rate(
+    ffmpeg_tools: FFmpegTools, tmp_path: Path
+) -> None:
+    """44.1'den 96'ya buyutulmus kayit: resampler duvari codec duvari degil (D3).
+
+    Once 22.05 kHz'teki duvar "brickwall" ve ustundeki bosluk "bos taban"
+    sayiliyordu; dosya dogal hizda ne diyorsa buyutulmus hali de onu demeli.
+    """
+    ff = ffmpeg_tools.ffmpeg
+    x = _cd_like()
+    native = _flac(ff, x, tmp_path / "native.flac")
+    upsampled = _flac(ff, x, tmp_path / "up96.flac", rate=96_000)
+    lossy = tmp_path / "lossy.mp3"
+    subprocess.run(
+        [
+            str(ff),
+            "-v",
+            "error",
+            "-i",
+            str(native),
+            "-c:a",
+            "libmp3lame",
+            "-b:a",
+            "128k",
+            str(lossy),
+        ],
+        check=True,
+    )
+    lossy_up = tmp_path / "lossy96.flac"
+    subprocess.run(
+        [
+            str(ff),
+            "-v",
+            "error",
+            "-i",
+            str(lossy),
+            "-af",
+            "aformat=sample_fmts=dbl,aresample=96000:resampler=soxr:precision=28:cutoff=0.99",
+            "-sample_fmt",
+            "s32",
+            "-c:a",
+            "flac",
+            str(lossy_up),
+        ],
+        check=True,
+    )
+
+    def judge(path: Path) -> verdict.Verdict:
+        return verdict.verify(ff, probe(ffmpeg_tools.ffprobe, path))
+
+    base, up = judge(native), judge(upsampled)
+    assert base.bucket != "consistent_lossy", base
+    assert up.bucket == base.bucket, up
+    keys = [getattr(n, "key", "") for n in up.notes]
+    assert "single.upsampled" in keys and "single.rejudged" in keys
+    assert judge(lossy_up).bucket == "consistent_lossy"
