@@ -68,6 +68,9 @@ _GATE_MAX_LAG = 2
 # gecikmesi dosyanin cogunluguna ait degil.
 _GATE_MIN_KEPT = 0.5
 
+# Referansin side gucu mid'inkinin bu katindan (-60 dB) azsa side olculmez.
+_EMPTY_SIDE = 1e-6
+
 # Taban kesiti icin denenen konumlar (kaydin kullanilabilir kismina gore kesir).
 _EXCERPT_FRACTIONS = (0.5, 0.25, 0.75, 0.1, 0.9)
 
@@ -544,15 +547,31 @@ def compare(
     def band(lo_hz: float, hi_hz: float, floor_db: float) -> BandResult:
         lo, hi = hz_to_bin(lo_hz, rate, fft_size), hz_to_bin(hi_hz, rate, fft_size)
         hi = max(hi, lo + 1)
+        mid_stats = mid.band(lo, hi, gain=gain)
+        side_stats = side.band(lo, hi, gain=gain) if side is not None else None
+        if (
+            side_stats is not None
+            and side_stats.reference_power <= _EMPTY_SIDE * mid_stats.reference_power
+        ):
+            # Referansin bu bantta side icerigi yok (L=R, dual mono): side S/N
+            # tanimsiz ve aciklamasiz NaN/-inf gosteriliyordu (denetim D10).
+            # Referansta side VARKEN testte cokmusse -inf gercek bir bulgudur
+            # ve bu kurala girmez.
+            side_stats = None
         return BandResult(
-            lo_hz=lo_hz,
-            hi_hz=hi_hz,
-            mid=mid.band(lo, hi, gain=gain),
-            side=side.band(lo, hi, gain=gain) if side is not None else None,
-            floor_db=floor_db,
+            lo_hz=lo_hz, hi_hz=hi_hz, mid=mid_stats, side=side_stats, floor_db=floor_db
         )
 
     bands = tuple(band(lo, hi, f) for (lo, hi), f in zip(layout, floors[:-1], strict=True))
+    broadband = band(*broadband_hz, floors[-1])
+    if side is not None and broadband.side is None:
+        notes.append(
+            Message(
+                "compare.no_side",
+                "the reference has no side (left minus right) content, as in dual mono: "
+                "side is not measured",
+            )
+        )
     return ComparisonResult(
         reference=reference.summary(),
         test=test.summary(),
@@ -560,7 +579,7 @@ def compare(
         status="measured",
         analysis_rate=rate,
         bands=bands,
-        broadband=band(*broadband_hz, floors[-1]),
+        broadband=broadband,
         gain_db=db(abs(gain)),
         polarity=-1 if gain < 0 else 1,
         frames=mid.frames,

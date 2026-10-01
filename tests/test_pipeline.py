@@ -508,3 +508,50 @@ def test_a_silent_middle_does_not_leave_the_floor_unmeasured(
     assert result.status == "measured", result.notes
     assert result.broadband is not None and math.isfinite(result.broadband.floor_db)
     assert math.isfinite(result.headline_snr_db)
+
+
+@pytest.mark.needs_ffmpeg
+def test_dual_mono_has_no_side_to_measure(ffmpeg_tools: FFmpegTools, tmp_path: Path) -> None:
+    """L=R referansta side S/N aciklamasiz NaN/-inf gosteriliyordu (D10)."""
+    ff = str(ffmpeg_tools.ffmpeg)
+    reference = tmp_path / "dual.flac"
+    subprocess.run(
+        [
+            ff,
+            "-y",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            SOURCE.format(seed=4),
+            "-ac",
+            "2",
+            "-c:a",
+            "flac",
+            str(reference),
+        ],
+        check=True,
+    )
+    test = tmp_path / "dual.opus"
+    subprocess.run(
+        [
+            ff,
+            "-y",
+            "-v",
+            "error",
+            "-i",
+            str(reference),
+            "-c:a",
+            "libopus",
+            "-b:a",
+            "128k",
+            str(test),
+        ],
+        check=True,
+    )
+    result = _run(ffmpeg_tools, reference, test)
+    assert result.status == "measured"
+    assert result.broadband is not None and result.broadband.side is None
+    assert all(b.side is None for b in result.bands)
+    assert any(getattr(n, "key", "") == "compare.no_side" for n in result.notes)

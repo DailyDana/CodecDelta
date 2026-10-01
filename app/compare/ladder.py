@@ -126,7 +126,10 @@ def place(values: Sequence[float], bitrates: Sequence[int], test_value: float) -
     Eksen "buyuk = daha iyi" olmali (S/N). NMR icin cagiran taraf isareti
     cevirir. Ara degerleme log2(bitrate) uzerinde dogrusal.
     """
-    if math.isnan(test_value) or len(values) < 2 or any(math.isnan(v) for v in values):
+    # -inf (testte hic koherent guc yok) bir konum degil: "64k'nin altinda"
+    # demek yanilticiydi (denetim D10). +inf (birebir kopya) "ustunde" sayilir.
+    unusable = math.isnan(test_value) or test_value == -math.inf
+    if unusable or len(values) < 2 or not all(math.isfinite(v) for v in values):
         return Placement("unknown", None, None, None, False)
     order = np.argsort(bitrates)
     rates = np.asarray(bitrates, dtype=np.float64)[order]
