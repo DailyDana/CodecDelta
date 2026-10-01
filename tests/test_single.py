@@ -426,3 +426,14 @@ def test_a_file_without_a_length_is_judged_on_its_start(
     result = verdict.verify(ffmpeg_tools.ffmpeg, info)
     assert any(getattr(n, "key", "") == "single.unknown_duration" for n in result.notes)
     assert result.bucket == "consistent_lossless"
+
+
+@pytest.mark.needs_ffmpeg
+def test_a_silent_middle_moves_the_excerpt(ffmpeg_tools: FFmpegTools, tmp_path: Path) -> None:
+    """Orta kesit sessizken hukum "belirsiz" cikiyordu (D13)."""
+    from tests.conftest import silent_middle
+
+    path = silent_middle(ffmpeg_tools.ffmpeg, tmp_path / "gap.flac")
+    result = verdict.verify(ffmpeg_tools.ffmpeg, probe(ffmpeg_tools.ffprobe, path))
+    assert result.bucket == "consistent_lossless", result
+    assert any(getattr(n, "key", "") == "single.moved_excerpt" for n in result.notes)

@@ -864,3 +864,8 @@ Bulgular ve durumlari: `docs/AUDIT-2026-09.md`.
   7 MB'a indi; 40 dosyada kanit degerleri 3e-14 icinde ayni. Uzunlugunu
   belirtmeyen dosyada (boruya yazilmis FLAC) tum dosya bellege aliniyordu;
   artik bastan 60 s okunuyor ve bu not ediliyor.
+- **D7, D13 -- sessiz kesit.** Olcum tabani ve referanssiz dogrulama 30 s'lik
+  bir kesit kullaniyor ve kesit hep ortadan aliniyordu; ortasi sessiz bir
+  kayitta taban NaN (manset NaN) ve dogrulama "belirsiz" cikiyordu. Kesit
+  kullanilamazsa sirayla ceyrekler ve kenarlara yakin konumlar deneniyor; ek
+  maliyet yalnizca sessiz durumda. Dogrulamada kesit kaydirildiysa not dusuluyor.

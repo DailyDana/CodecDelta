@@ -15,6 +15,7 @@ birakilir, yalnizca bin basina uc toplam tutulur.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -66,6 +67,9 @@ _GATE_MAX_LAG = 2
 # Olcume katilan blok orani bunun altindaysa sonuc olculmemis sayilir: plan
 # gecikmesi dosyanin cogunluguna ait degil.
 _GATE_MIN_KEPT = 0.5
+
+# Taban kesiti icin denenen konumlar (kaydin kullanilabilir kismina gore kesir).
+_EXCERPT_FRACTIONS = (0.5, 0.25, 0.75, 0.1, 0.9)
 
 # Raporlanan en ust frekans, Nyquist'in kesri olarak (bkz. `compare`).
 NYQUIST_FRACTION = 0.99
@@ -511,21 +515,27 @@ def compare(
     nyquist *= min(resample.cutoff, NYQUIST_FRACTION)
     layout = band_layout(rate, nyquist)
     broadband_hz = (BROADBAND_HZ[0], min(BROADBAND_HZ[1], nyquist))
-    floors = calibration.measure_floor(
-        ffmpeg,
-        reference.path,
-        stream_index=reference.stream_index,
-        channels=ref_stream.channels,
-        source_rate=ref_stream.sample_rate,
-        other_rate=test_stream.sample_rate,
-        fractional_delay=0.0 if model.slope else fraction,
-        drift_slope=model.slope,
-        bands_hz=[*layout, broadband_hz],
-        size=fft_size,
-        start=_excerpt_start(reference.info.duration),
-        resample=resample,
-        cancel=cancel,
-    )
+    floors: list[float] = []
+    for start in _excerpt_starts(reference.info.duration):
+        floors = calibration.measure_floor(
+            ffmpeg,
+            reference.path,
+            stream_index=reference.stream_index,
+            channels=ref_stream.channels,
+            source_rate=ref_stream.sample_rate,
+            other_rate=test_stream.sample_rate,
+            fractional_delay=0.0 if model.slope else fraction,
+            drift_slope=model.slope,
+            bands_hz=[*layout, broadband_hz],
+            size=fft_size,
+            start=start,
+            resample=resample,
+            cancel=cancel,
+        )
+        # Kesit sessizse (ortasi sessiz kayit, gizli parca) taban olculemez ve
+        # manset NaN cikiyordu (denetim D7): baska bir konum denenir.
+        if not math.isnan(floors[-1]):
+            break
 
     gain = mid.gain(
         hz_to_bin(broadband_hz[0], rate, fft_size), hz_to_bin(broadband_hz[1], rate, fft_size)
@@ -569,11 +579,16 @@ def _overlap(model: DelayModel, ref_length: float, test_length: float) -> tuple[
     return int(lo + pad), int(hi - pad)
 
 
-def _excerpt_start(duration: float | None) -> float | None:
-    """Taban kesiti icin baslangic: kaydin ortasina yakin, sessiz giris/cikistan uzak."""
+def _excerpt_starts(duration: float | None) -> list[float | None]:
+    """Taban kesiti icin aday baslangiclar, tercih sirasiyla.
+
+    Once ortasi (sessiz giris/cikistan uzak); orasi sessizse ceyrekler, sonra
+    kenarlara yakin konumlar.
+    """
     if duration is None or duration <= calibration.DEFAULT_EXCERPT_S * 1.5:
-        return None
-    return max(0.0, duration / 2.0 - calibration.DEFAULT_EXCERPT_S / 2.0)
+        return [None]
+    room = duration - calibration.DEFAULT_EXCERPT_S
+    return [max(0.0, f * room) for f in _EXCERPT_FRACTIONS]
 
 
 def _main_pass(

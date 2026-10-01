@@ -40,6 +40,9 @@ DEFAULT_EXCERPT_S = 30.0
 _SKIP_EDGE_FRACTION = 0.05
 # Suresi bilinmeyen dosyada bastan okunan sure (s).
 _UNKNOWN_DURATION_SPAN_S = 60.0
+# Kesit konumlari, tercih sirasiyla (kenarlar atildiktan sonra kalan araliga
+# gore kesir). Ilki ortasi: onceki davranis.
+_EXCERPT_FRACTIONS = (0.5, 0.25, 0.75, 0.0, 1.0)
 # Bunun altindaki FLAC blok boyu olagan bir kodlayicidan gelmez (bkz. judge_container).
 _UNUSUAL_BLOCKSIZE = 256
 
@@ -321,7 +324,7 @@ def verify(
     if not stream.is_lossless:
         return Verdict("not_applicable", (), (), (f"codec {stream.codec} is lossy by design",))
 
-    start: float | None = None
+    starts: list[float | None] = [None]
     duration: float | None = None
     span_notes: list[str] = []
     if info.duration is None:
@@ -337,8 +340,11 @@ def verify(
                 seconds=duration,
             )
         )
+        starts = [None, duration, 2 * duration]
     elif info.duration > excerpt_s / (1.0 - 2 * _SKIP_EDGE_FRACTION):
-        start = max(_SKIP_EDGE_FRACTION * info.duration, info.duration / 2.0 - excerpt_s / 2.0)
+        lo = _SKIP_EDGE_FRACTION * info.duration
+        hi = info.duration - lo - excerpt_s
+        starts = [lo + f * (hi - lo) for f in _EXCERPT_FRACTIONS]
         duration = excerpt_s
 
     def analyse(rate: int | None = None) -> SpectralEvidence:
@@ -354,7 +360,24 @@ def verify(
             cancel=cancel,
         )
 
+    # Kesit sessizse (gizli parca, uzun sessiz giris, ortasi sessiz kayit)
+    # hukum "belirsiz" cikiyordu (denetim D13): baska konumlar denenir.
+    start = starts[0]
     evidence = analyse()
+    for candidate in starts[1:]:
+        if evidence.frames >= thresholds.MIN_ACTIVE_FRAMES:
+            break
+        start = candidate
+        evidence = analyse()
+    if start != starts[0] and start is not None:
+        span_notes.append(
+            Message(
+                "single.moved_excerpt",
+                "the usual excerpt is silent: judged on {start:.0f}-{end:.0f} s",
+                start=start,
+                end=start + (duration or 0.0),
+            )
+        )
     rate_notes: list[str] = []
     rejudge = _rejudge_rate(evidence)
     if rejudge is not None:

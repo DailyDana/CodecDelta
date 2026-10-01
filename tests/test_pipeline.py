@@ -477,3 +477,34 @@ def test_a_mostly_different_file_is_not_measured(
     result = _run(ffmpeg_tools, edited["ref"], edited["mostly"])
     assert result.status != "measured"
     assert math.isnan(result.headline_snr_db) or result.broadband is None
+
+
+@pytest.mark.needs_ffmpeg
+def test_a_silent_middle_does_not_leave_the_floor_unmeasured(
+    ffmpeg_tools: FFmpegTools, tmp_path: Path
+) -> None:
+    """Taban kesiti sessizlige dusunce manset NaN cikiyordu (D7)."""
+    from tests.conftest import silent_middle
+
+    reference = silent_middle(ffmpeg_tools.ffmpeg, tmp_path / "gap.flac")
+    test = tmp_path / "gap.opus"
+    subprocess.run(
+        [
+            str(ffmpeg_tools.ffmpeg),
+            "-y",
+            "-v",
+            "error",
+            "-i",
+            str(reference),
+            "-c:a",
+            "libopus",
+            "-b:a",
+            "128k",
+            str(test),
+        ],
+        check=True,
+    )
+    result = _run(ffmpeg_tools, reference, test)
+    assert result.status == "measured", result.notes
+    assert result.broadband is not None and math.isfinite(result.broadband.floor_db)
+    assert math.isfinite(result.headline_snr_db)
