@@ -94,6 +94,140 @@ def _smooth(rows: np.ndarray, width: int) -> np.ndarray:
     return result
 
 
+class _Accumulator:
+    """Spektral kaniti AKISLI biriktirir: tum kesitin STFT'si hic tutulmaz.
+
+    Kanit yalnizca uzun donem ortalamalara (mid ve side gucu) ve kare basina
+    tek bir kesim degerine ihtiyac duyar. Once tum spektrumlar bellekte
+    tutuluyordu: 30 s'lik kesit 96 kHz'te 353 MB, 192 kHz'te 705 MB (denetim
+    D5). Sonuclar tek parca hesaplamayla ayni.
+    """
+
+    def __init__(self, sample_rate: int, *, top_hz: float | None, stereo: bool) -> None:
+        self.sample_rate = sample_rate
+        self.top_hz = top_hz
+        self._mid_stft = StreamingStft(FFT_SIZE)
+        self._side_stft = StreamingStft(FFT_SIZE) if stereo else None
+        self._scale = 4.0 / (FFT_SIZE * float(np.sum(hann(FFT_SIZE) ** 2)))
+        self.freqs = np.fft.rfftfreq(FFT_SIZE, 1.0 / sample_rate)
+        self._ref_band = (self.freqs >= _REF_LO_HZ) & (self.freqs < _REF_HI_HZ)
+        half = _SMOOTH_BINS // 2
+        self._smooth_freqs = self.freqs[half : self.freqs.size - half]
+        self._drop_bins = max(2, round(_DROP_WINDOW_HZ / (sample_rate / FFT_SIZE)))
+        limit = self._smooth_freqs.size - self._drop_bins  # en ust pencere disarida
+        if top_hz is not None:
+            limit = min(limit, int(np.searchsorted(self._smooth_freqs, top_hz, side="right")))
+        self._cutoff_limit = limit
+        self._power_sum = np.zeros(self.freqs.size)
+        self._side_sum = np.zeros(self.freqs.size) if stereo else None
+        self._active = 0
+        self._cutoffs: list[np.ndarray] = []
+
+    def push(self, mid: np.ndarray, side: np.ndarray | None) -> None:
+        spectra = self._mid_stft.push(mid.astype(np.float64))
+        side_spectra = (
+            self._side_stft.push(side.astype(np.float64))
+            if self._side_stft is not None and side is not None
+            else None
+        )
+        if not spectra.shape[0]:
+            return
+        power = (spectra.real**2 + spectra.imag**2) * self._scale
+        frame_ref_db = 10.0 * np.log10(np.maximum(power[:, self._ref_band].mean(axis=1), 1e-30))
+        active = frame_ref_db > _SILENT_FRAME_DB
+        if not active.any():
+            return
+        power, frame_ref_db = power[active], frame_ref_db[active]
+        self._active += int(power.shape[0])
+        self._power_sum += power.sum(axis=0)
+        if self._side_sum is not None and side_spectra is not None:
+            self._side_sum += (np.abs(side_spectra[active]) ** 2 * self._scale).sum(axis=0)
+        frame_db = _smooth(10.0 * np.log10(np.maximum(power, 1e-30)), _SMOOTH_BINS)
+        cutoffs = np.empty(frame_db.shape[0])
+        for i, row in enumerate(frame_db):
+            above = np.nonzero(row[: self._cutoff_limit] > frame_ref_db[i] - _FRAME_CUTOFF_DROP_DB)[
+                0
+            ]
+            cutoffs[i] = self._smooth_freqs[above[-1]] if above.size else 0.0
+        self._cutoffs.append(cutoffs)
+
+    def finish(self) -> SpectralEvidence:
+        sample_rate, freqs = self.sample_rate, self.freqs
+        empty = SpectralEvidence(
+            sample_rate,
+            0,
+            math.nan,
+            math.nan,
+            math.nan,
+            math.nan,
+            math.nan,
+            math.nan,
+            math.nan,
+            np.zeros(0),
+            freqs,
+        )
+        if self._active < 4:
+            return empty
+
+        # -- uzun donem spektrum ve diz --------------------------------------------
+        ltas_db = 10.0 * np.log10(np.maximum(self._power_sum / self._active, 1e-30))
+        reference_db = float(ltas_db[self._ref_band].mean())
+        rel = ltas_db - reference_db
+        smooth = _smooth(ltas_db[None, :], _SMOOTH_BINS)[0]
+        smooth_freqs = self._smooth_freqs
+        drop_bins = self._drop_bins
+        start = int(np.searchsorted(smooth_freqs, _KNEE_SEARCH_FROM_HZ))
+        stop = smooth_freqs.size - drop_bins
+        if self.top_hz is not None:
+            stop = min(
+                stop, int(np.searchsorted(smooth_freqs, self.top_hz, side="right")) - drop_bins
+            )
+        if stop <= start:
+            return empty
+        drops = smooth[start + drop_bins : stop + drop_bins] - smooth[start:stop]
+        at = int(np.argmin(drops)) + start
+        knee_hz = float(smooth_freqs[at] + _DROP_WINDOW_HZ / 2.0)
+        knee_drop = float(-drops[at - start])
+
+        # -- diz sonrasi taban ---------------------------------------------------
+        floor_lo = knee_hz + _FLOOR_GAP_HZ
+        floor_hi = _FLOOR_TOP_FRACTION * sample_rate / 2.0
+        if self.top_hz is not None:
+            floor_hi = min(floor_hi, self.top_hz)
+        floor_band = (freqs >= floor_lo) & (freqs <= floor_hi)
+        floor_rel = float(rel[floor_band].mean()) if floor_band.sum() >= 4 else math.nan
+
+        # -- cerceve basina kesim -------------------------------------------------
+        cutoffs = np.concatenate(self._cutoffs)
+        q25, q50, q75 = np.percentile(cutoffs, [25, 50, 75])
+
+        # -- side ------------------------------------------------------------------
+        side_hf = math.nan
+        if self._side_sum is not None:
+            side_db = 10.0 * np.log10(np.maximum(self._side_sum / self._active, 1e-30))
+            hf = (freqs >= _KNEE_SEARCH_FROM_HZ) & (freqs < knee_hz)
+            if hf.sum() >= 4:
+                ref_band = self._ref_band
+                side_hf = float(
+                    (side_db[hf] - ltas_db[hf]).mean()
+                    - (side_db[ref_band] - ltas_db[ref_band]).mean()
+                )
+
+        return SpectralEvidence(
+            sample_rate=sample_rate,
+            frames=self._active,
+            reference_db=reference_db,
+            knee_hz=knee_hz,
+            knee_drop_db=knee_drop,
+            floor_rel_db=floor_rel,
+            cutoff_median_hz=float(q50),
+            cutoff_iqr_hz=float(q75 - q25),
+            side_hf_rel_db=side_hf,
+            ltas_rel_db=rel.astype(np.float32),
+            freqs_hz=freqs,
+        )
+
+
 def analyse_samples(
     mid: np.ndarray,
     side: np.ndarray | None,
@@ -106,97 +240,9 @@ def analyse_samples(
     `top_hz`: bunun ustundeki spektrum dosyaya degil araya giren resampler'a
     aittir; diz, taban ve cerceve kesimi bu sinirin altinda aranir.
     """
-    stft = StreamingStft(FFT_SIZE)
-    spectra = stft.push(mid.astype(np.float64))
-    scale = 4.0 / (FFT_SIZE * float(np.sum(hann(FFT_SIZE) ** 2)))
-    freqs = np.fft.rfftfreq(FFT_SIZE, 1.0 / sample_rate)
-    power = (spectra.real**2 + spectra.imag**2) * scale
-    ref_band = (freqs >= _REF_LO_HZ) & (freqs < _REF_HI_HZ)
-    frame_ref_db = 10.0 * np.log10(np.maximum(power[:, ref_band].mean(axis=1), 1e-30))
-    active = frame_ref_db > _SILENT_FRAME_DB
-    empty = SpectralEvidence(
-        sample_rate,
-        0,
-        math.nan,
-        math.nan,
-        math.nan,
-        math.nan,
-        math.nan,
-        math.nan,
-        math.nan,
-        np.zeros(0),
-        freqs,
-    )
-    if active.sum() < 4:
-        return empty
-    power = power[active]
-    frame_ref_db = frame_ref_db[active]
-
-    # -- uzun donem spektrum ve diz --------------------------------------------
-    ltas_db = 10.0 * np.log10(np.maximum(power.mean(axis=0), 1e-30))
-    reference_db = float(ltas_db[ref_band].mean())
-    rel = ltas_db - reference_db
-    half = _SMOOTH_BINS // 2
-    smooth = _smooth(ltas_db[None, :], _SMOOTH_BINS)[0]
-    smooth_freqs = freqs[half : freqs.size - half]
-    bin_hz = sample_rate / FFT_SIZE
-    drop_bins = max(2, round(_DROP_WINDOW_HZ / bin_hz))
-    start = int(np.searchsorted(smooth_freqs, _KNEE_SEARCH_FROM_HZ))
-    stop = smooth_freqs.size - drop_bins
-    if top_hz is not None:
-        stop = min(stop, int(np.searchsorted(smooth_freqs, top_hz, side="right")) - drop_bins)
-    if stop <= start:
-        return empty
-    drops = smooth[start + drop_bins : stop + drop_bins] - smooth[start:stop]
-    at = int(np.argmin(drops)) + start
-    knee_hz = float(smooth_freqs[at] + _DROP_WINDOW_HZ / 2.0)
-    knee_drop = float(-drops[at - start])
-
-    # -- diz sonrasi taban ---------------------------------------------------
-    floor_lo = knee_hz + _FLOOR_GAP_HZ
-    floor_hi = _FLOOR_TOP_FRACTION * sample_rate / 2.0
-    if top_hz is not None:
-        floor_hi = min(floor_hi, top_hz)
-    floor_band = (freqs >= floor_lo) & (freqs <= floor_hi)
-    floor_rel = float(rel[floor_band].mean()) if floor_band.sum() >= 4 else math.nan
-
-    # -- cerceve basina kesim -------------------------------------------------
-    frame_db = _smooth(10.0 * np.log10(np.maximum(power, 1e-30)), _SMOOTH_BINS)
-    frame_freqs = smooth_freqs
-    limit = frame_freqs.size - drop_bins  # en ust pencere disarida
-    if top_hz is not None:
-        limit = min(limit, int(np.searchsorted(frame_freqs, top_hz, side="right")))
-    cutoffs = np.empty(frame_db.shape[0])
-    for i, row in enumerate(frame_db):
-        above = np.nonzero(row[:limit] > frame_ref_db[i] - _FRAME_CUTOFF_DROP_DB)[0]
-        cutoffs[i] = frame_freqs[above[-1]] if above.size else 0.0
-    q25, q50, q75 = np.percentile(cutoffs, [25, 50, 75])
-
-    # -- side ------------------------------------------------------------------
-    side_hf = math.nan
-    if side is not None and side.size:
-        side_power = np.abs(StreamingStft(FFT_SIZE).push(side.astype(np.float64))) ** 2 * scale
-        side_power = side_power[active]
-        side_db = 10.0 * np.log10(np.maximum(side_power.mean(axis=0), 1e-30))
-        hf = (freqs >= _KNEE_SEARCH_FROM_HZ) & (freqs < knee_hz)
-        if hf.sum() >= 4:
-            side_hf = float(
-                (side_db[hf] - ltas_db[hf]).mean() - (side_db[ref_band] - ltas_db[ref_band]).mean()
-            )
-
-    return SpectralEvidence(
-        sample_rate=sample_rate,
-        frames=int(power.shape[0]),
-        reference_db=reference_db,
-        knee_hz=knee_hz,
-        knee_drop_db=knee_drop,
-        floor_rel_db=floor_rel,
-        cutoff_median_hz=float(q50),
-        cutoff_iqr_hz=float(q75 - q25),
-        side_hf_rel_db=side_hf,
-        ltas_rel_db=rel.astype(np.float32),
-        freqs_hz=freqs,
-    )
+    accumulator = _Accumulator(sample_rate, top_hz=top_hz, stereo=side is not None)
+    accumulator.push(mid, side)
+    return accumulator.finish()
 
 
 def analyse(
@@ -211,7 +257,7 @@ def analyse(
     rate: int | None = None,
     cancel: CancelToken | None = None,
 ) -> SpectralEvidence:
-    """Dosyanin bir kesitini cozup kanit cikarir.
+    """Dosyanin bir kesitini cozup kanit cikarir; bellek kesit boyundan bagimsiz.
 
     Varsayilan native hiz: resampler'in kendi kesimi olcumu kirletir. `rate`
     yalnizca icerigin zaten o hizin Nyquist'inin altinda bittigi bilinen
@@ -219,7 +265,8 @@ def analyse(
     """
     if rate is not None:
         sample_rate = rate
-    blocks = []
+    top_hz = _RESAMPLED_TOP_FRACTION * sample_rate / 2.0 if rate is not None else None
+    accumulator = _Accumulator(sample_rate, top_hz=top_hz, stereo=channels >= 2)
     with open_pcm(
         ffmpeg,
         path,
@@ -232,14 +279,9 @@ def analyse(
         cancel=cancel,
     ) as stream:
         for block in stream.blocks(1 << 16):
-            blocks.append(block.astype(np.float64))
-    if not blocks:
-        return analyse_samples(np.zeros(0), None, sample_rate)
-    top_hz = _RESAMPLED_TOP_FRACTION * sample_rate / 2.0 if rate is not None else None
-    pcm = np.concatenate(blocks)
-    if pcm.shape[1] >= 2:
-        mid = (pcm[:, 0] + pcm[:, 1]) * 0.5
-        side: np.ndarray | None = (pcm[:, 0] - pcm[:, 1]) * 0.5
-    else:
-        mid, side = pcm[:, 0], None
-    return analyse_samples(mid, side, sample_rate, top_hz=top_hz)
+            pcm = block.astype(np.float64)
+            if pcm.shape[1] >= 2:
+                accumulator.push((pcm[:, 0] + pcm[:, 1]) * 0.5, (pcm[:, 0] - pcm[:, 1]) * 0.5)
+            else:
+                accumulator.push(pcm[:, 0], None)
+    return accumulator.finish()

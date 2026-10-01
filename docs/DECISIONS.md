@@ -852,3 +852,15 @@ Bulgular ve durumlari: `docs/AUDIT-2026-09.md`.
   ardindaki yol bileseni olarak sayiyor, temizlik butun kelime olarak siliyor.
   Rapor bu adlari yol disinda hic yazmiyor; mutlak yollar zaten ayri desenle
   yakalaniyor. Engellenen raporun iletisi ilk uc izi gosteriyor.
+- **D5 -- bellek.** Karsilastirmanin tepe calisma kumesi 15 dk'da 504 -> 158 MB,
+  60 dk'da 1.9 GB -> 267 MB. Dogrusal kalan tek kalem planin kabul ettigi int16
+  8 kHz zarf ornekleri (iki dosya, dakikada 1.9 MB). Yapilanlar: zarf akisli
+  hesaplaniyor (tum PCM float64'e cevrilmiyor); hiz tahmini int16 ornekleri
+  pencere pencere float'a ceviriyor ve PAL hipotezi telafisini yalnizca okunan
+  pencerede yapiyor (tam boy yeniden orneklenmis kopya yok); zarf korelasyonu
+  64k'lik gecikme bloklarinda. Sonuclar degismedi (4 cift, 4 ondalik).
+- Referanssiz dogrulama da akisli: kanit yalnizca uzun donem ortalamalar ve
+  kare basina kesim istiyor. 30 s kesit 44.1/96/192 kHz'te 163/353/705 MB'tan
+  7 MB'a indi; 40 dosyada kanit degerleri 3e-14 icinde ayni. Uzunlugunu
+  belirtmeyen dosyada (boruya yazilmis FLAC) tum dosya bellege aliniyordu;
+  artik bastan 60 s okunuyor ve bu not ediliyor.

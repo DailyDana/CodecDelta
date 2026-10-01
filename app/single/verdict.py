@@ -38,6 +38,8 @@ Bucket = Literal["consistent_lossless", "consistent_lossy", "undetermined", "not
 DEFAULT_EXCERPT_S = 30.0
 # Bas ve son bu kesir kadar atlanir (fade, alkis, gizli parca).
 _SKIP_EDGE_FRACTION = 0.05
+# Suresi bilinmeyen dosyada bastan okunan sure (s).
+_UNKNOWN_DURATION_SPAN_S = 60.0
 # Bunun altindaki FLAC blok boyu olagan bir kodlayicidan gelmez (bkz. judge_container).
 _UNUSUAL_BLOCKSIZE = 256
 
@@ -321,7 +323,21 @@ def verify(
 
     start: float | None = None
     duration: float | None = None
-    if info.duration is not None and info.duration > excerpt_s / (1.0 - 2 * _SKIP_EDGE_FRACTION):
+    span_notes: list[str] = []
+    if info.duration is None:
+        # Baslikta uzunluk yok (boruya yazilmis FLAC): orta kesit bulunamaz.
+        # Bastan sinirli bir sure okunur; analiz akisli oldugu icin bellek icin
+        # degil SURE icin (once tum dosya bellege aliniyordu: 96 kHz'te dakikada
+        # ~700 MB, denetim D5).
+        duration = _UNKNOWN_DURATION_SPAN_S
+        span_notes.append(
+            Message(
+                "single.unknown_duration",
+                "the file does not state its length: judged on the first {seconds:.0f} s",
+                seconds=duration,
+            )
+        )
+    elif info.duration > excerpt_s / (1.0 - 2 * _SKIP_EDGE_FRACTION):
         start = max(_SKIP_EDGE_FRACTION * info.duration, info.duration / 2.0 - excerpt_s / 2.0)
         duration = excerpt_s
 
@@ -364,7 +380,7 @@ def verify(
         )
         evidence = analyse(rejudge)
     reasons, counter, notes = judge_spectral(evidence)
-    notes = rate_notes + notes
+    notes = span_notes + rate_notes + notes
     flac_info = flac_bitstream.scan(info.path) if stream.codec == "flac" else None
     notes += judge_container(info, flac_info)
     bucket = combine(reasons, counter, notes)

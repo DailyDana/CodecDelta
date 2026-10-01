@@ -126,12 +126,6 @@ class AlignmentPlan:
         return self.verdict == "aligned"
 
 
-def _samples_as_float(env: Envelope) -> np.ndarray | None:
-    if env.samples is None:
-        return None
-    return env.samples.astype(np.float64) / 32767.0
-
-
 def _window_frames(sample_rate: int, window_s: float, drift: DriftEstimate | None) -> int:
     """Pencere uzunlugu; surukelenme varsa kayma sinirina gore kisaltilir."""
     frames = int(window_s * sample_rate)
@@ -218,8 +212,10 @@ def build(
         )
 
     # -- surukelenme ---------------------------------------------------------
-    ref_samples = _samples_as_float(reference_env)
-    test_samples = _samples_as_float(test_env)
+    # int16 ornekler OLDUGU GIBI verilir: hiz tahmini olcekten bagimsizdir ve
+    # pencereleri kendisi cevirir. Tam boy float64 kopya 60 dakikalik ciftte
+    # 550 MB tutuyordu (denetim D5).
+    ref_samples, test_samples = reference_env.samples, test_env.samples
     if ref_samples is None or test_samples is None:
         reasons.append(
             Message("plan.no_samples", "speed ratio not measured: envelope kept no samples")

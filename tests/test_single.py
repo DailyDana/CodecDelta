@@ -341,3 +341,88 @@ def test_an_upsampled_cd_is_judged_at_its_source_rate(
     keys = [getattr(n, "key", "") for n in up.notes]
     assert "single.upsampled" in keys and "single.rejudged" in keys
     assert judge(lossy_up).bucket == "consistent_lossy"
+
+
+def test_streamed_evidence_matches_one_block() -> None:
+    """Akisli biriktirici, sinyal parca parca verilince ayni kaniti uretir (D5)."""
+    x = brickwall(pink(3), 16_000)
+    whole = spectral.analyse_samples(x, x * 0.3, RATE)
+    accumulator = spectral._Accumulator(RATE, top_hz=None, stereo=True)
+    for start in range(0, x.size, 10_007):
+        part = x[start : start + 10_007]
+        accumulator.push(part, part * 0.3)
+    parts = accumulator.finish()
+    assert parts.frames == whole.frames
+    for field in ("cutoff_median_hz", "knee_hz", "knee_drop_db", "floor_rel_db", "side_hf_rel_db"):
+        assert getattr(parts, field) == pytest.approx(getattr(whole, field), abs=1e-9), field
+
+
+@pytest.mark.needs_ffmpeg
+def test_verification_memory_does_not_grow_with_the_rate(
+    ffmpeg_tools: FFmpegTools, tmp_path: Path
+) -> None:
+    """192 kHz'lik kesit 705 MB tutuyordu; akisli analizle sabit kalmali (D5)."""
+    import tracemalloc
+
+    path = tmp_path / "hires.flac"
+    subprocess.run(
+        [
+            str(ffmpeg_tools.ffmpeg),
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "anoisesrc=color=pink:sample_rate=192000:duration=40:seed=3",
+            "-ac",
+            "2",
+            "-c:a",
+            "flac",
+            "-sample_fmt",
+            "s32",
+            str(path),
+        ],
+        check=True,
+    )
+    info = probe(ffmpeg_tools.ffprobe, path)
+    tracemalloc.start()
+    try:
+        verdict.verify(ffmpeg_tools.ffmpeg, info)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < 64 * 2**20, peak
+
+
+@pytest.mark.needs_ffmpeg
+def test_a_file_without_a_length_is_judged_on_its_start(
+    ffmpeg_tools: FFmpegTools, tmp_path: Path
+) -> None:
+    """Boruya yazilmis FLAC'ta uzunluk yok; tum dosya bellege aliniyordu (D5)."""
+    path = tmp_path / "piped.flac"
+    with path.open("wb") as out:
+        subprocess.run(
+            [
+                str(ffmpeg_tools.ffmpeg),
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "anoisesrc=color=pink:sample_rate=44100:duration=20:seed=3",
+                "-ac",
+                "2",
+                "-c:a",
+                "flac",
+                "-f",
+                "flac",
+                "-",
+            ],
+            stdout=out,
+            check=True,
+        )
+    info = probe(ffmpeg_tools.ffprobe, path)
+    assert info.duration is None
+    result = verdict.verify(ffmpeg_tools.ffmpeg, info)
+    assert any(getattr(n, "key", "") == "single.unknown_duration" for n in result.notes)
+    assert result.bucket == "consistent_lossless"

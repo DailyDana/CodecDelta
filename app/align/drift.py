@@ -26,6 +26,7 @@ kareler egimini tamamen cevirir.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Literal
 
@@ -170,9 +171,53 @@ class DriftEstimate:
         return self.status == "drift" and not self.is_resampling and abs(self.ppm) > _NEGLIGIBLE_PPM
 
 
+class _Lazy:
+    """Bir ornek dizisini pencere pencere float64 olarak veren gorunum.
+
+    Tam boy kopya hic yapilmaz: int16 zarf ornekleri yalnizca okunan pencerede
+    float64'e cevrilir, `ratio` verilirse hiz telafisi (dogrusal interpolasyon)
+    da yalnizca o pencerede hesaplanir. Once ornekler tumden float64'e
+    cevriliyor ve her PAL hipotezi icin test yeniden orneklenmis tam bir kopya
+    oluyordu: 60 dakikalik ciftte 1.9 GB (denetim D5).
+
+    Dogrusal interpolasyon yeterli: amac hangi HIPOTEZIN daha iyi hizalandigini
+    secmek; interpolasyon hatasi tum adaylara ayni bulasir ve sadelesir. Nihai
+    telafi boru hattinda soxr ile yapilir.
+    """
+
+    def __init__(self, data: np.ndarray, ratio: float = 1.0) -> None:
+        if isinstance(data, _Lazy):
+            raise TypeError("_Lazy ic ice kullanilmaz")
+        ensure_signal(data, "samples")
+        self._data = data
+        self._ratio = ratio
+        self.size = data.size if ratio == 1.0 else max(0, int(data.size / ratio))
+
+    def __getitem__(self, window: slice) -> np.ndarray:
+        start, stop, _ = window.indices(self.size)
+        if stop <= start:
+            return np.zeros(0, dtype=np.float64)
+        if self._ratio == 1.0:
+            return self._data[start:stop].astype(np.float64)
+        positions = np.arange(start, stop) * self._ratio
+        lo = int(positions[0])
+        hi = min(self._data.size, int(np.ceil(positions[-1])) + 2)
+        source = self._data[lo:hi].astype(np.float64)
+        result: np.ndarray = np.interp(positions, np.arange(lo, hi), source)
+        return result
+
+    def chunks(self, size: int) -> Iterator[np.ndarray]:
+        for start in range(0, self.size, size):
+            yield self[start : start + size]
+
+
+def _lazy(x: np.ndarray | _Lazy) -> _Lazy:
+    return x if isinstance(x, _Lazy) else _Lazy(x)
+
+
 def collect_anchors(
-    reference: np.ndarray,
-    test: np.ndarray,
+    reference: np.ndarray | _Lazy,
+    test: np.ndarray | _Lazy,
     sample_rate: int,
     *,
     coarse_lag_s: float = 0.0,
@@ -196,8 +241,7 @@ def collect_anchors(
     Theil-Sen bunlara dayanikli olsa da, once elenmeleri fit'i belirgin
     iyilestirir.
     """
-    ensure_signal(reference, "reference")
-    ensure_signal(test, "test")
+    reference, test = _lazy(reference), _lazy(test)
     if sample_rate <= 0:
         raise ValueError("sample_rate pozitif olmali")
     if count < 2:
@@ -365,23 +409,6 @@ def _classify(ratio: float, offset_s: float, anchors: int, residual_ms: float) -
     return DriftEstimate(ratio, offset_s, "drift", None, anchors, residual_ms)
 
 
-def _rescale(x: np.ndarray, ratio: float) -> np.ndarray:
-    """`x`'i `ratio` kati hizli calan bir kopyaya cevirir.
-
-    Dogrusal interpolasyon yeterli: burada amac mutlak dogruluk degil, hangi
-    HIPOTEZIN digerlerinden daha iyi hizalandigini secmek. Secim goreli oldugu
-    icin interpolasyonun kendi hatasi tum adaylara ayni sekilde bulasir ve
-    sadelesir. Nihai telafi boru hattinda soxr ile yapilir.
-    """
-    if ratio == 1.0:
-        return x
-    count = int(x.size / ratio)
-    if count < 2:
-        return x[:0]
-    scaled: np.ndarray = np.interp(np.arange(count) * ratio, np.arange(x.size), x)
-    return scaled
-
-
 def estimate_from_audio(
     reference: np.ndarray,
     test: np.ndarray,
@@ -409,19 +436,22 @@ def estimate_from_audio(
     gecikme kayit boyunca %4 degisir, zarf eslestirmesi ortalama bir yer secer
     ve 60 s'lik bir dosyada bile kaydin basinda 1 s'den fazla sapar.
     """
+    reference_samples, test_samples = _Lazy(reference), test
     reference_envelope = (
-        envelope.from_samples(reference, sample_rate, keep_samples=False)
+        envelope.from_chunks(reference_samples.chunks(sample_rate), sample_rate, keep_samples=False)
         if coarse_lag_s is None
         else None
     )
     best: tuple[float, float, DriftEstimate] | None = None
     for candidate in _HYPOTHESES:
-        compensated = _rescale(test, 1.0 / candidate)
+        compensated = _Lazy(test_samples, 1.0 / candidate)
         lag_s = coarse_lag_s
         if reference_envelope is not None:
             match = envelope.coarse_match(
                 reference_envelope,
-                envelope.from_samples(compensated, sample_rate, keep_samples=False),
+                envelope.from_chunks(
+                    compensated.chunks(sample_rate), sample_rate, keep_samples=False
+                ),
             )
             # Zarf bilgisizse (dinamigi duz icerik) gecikmesine guvenilmez ve
             # sifira dusulur -- ama hipotez ELENMEZ. Ilk surum burada eliyordu
@@ -430,7 +460,7 @@ def estimate_from_audio(
             # capalar verir; zarf yalnizca nereye bakilacagini soyler.
             lag_s = match.lag_s if match.rho >= MIN_ENVELOPE_CORRELATION else 0.0
         anchors = collect_anchors(
-            reference,
+            reference_samples,
             compensated,
             sample_rate,
             coarse_lag_s=lag_s if lag_s is not None else 0.0,

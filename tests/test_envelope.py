@@ -305,3 +305,23 @@ def test_build_from_real_file(ffmpeg_tools: FFmpegTools, tmp_path: Path) -> None
     match = coarse_match(reference, test)
     assert match.lag_s == pytest.approx(-12.0, abs=0.05)
     assert match.rho > 0.85
+
+
+# -- bellek (denetim D5) ---------------------------------------------------------
+
+
+@pytest.mark.parametrize("chunk", [1, 79, 80, 160, 1000, 8000])
+def test_chunked_envelope_matches_the_whole_signal(chunk: int) -> None:
+    """Akisli zarf, parca boyu ne olursa olsun tek parca hesaplamayla ayni."""
+    x = dynamic_noise(6.0, seed=3)
+    whole = from_samples(x, RATE)
+    parts = envelope.from_chunks((x[i : i + chunk] for i in range(0, x.size, chunk)), RATE)
+    np.testing.assert_allclose(parts.values, whole.values, rtol=0, atol=1e-6)
+    assert parts.samples is not None and whole.samples is not None
+    np.testing.assert_array_equal(parts.samples, whole.samples)
+    assert parts.duration_s == whole.duration_s
+
+
+def test_envelope_of_nothing_is_empty() -> None:
+    env = envelope.from_chunks(iter(()), RATE)
+    assert env.frames == 0 and env.samples is None and env.duration_s == 0.0

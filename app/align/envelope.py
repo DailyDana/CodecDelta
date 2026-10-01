@@ -20,6 +20,7 @@ seviye farkini tumuyle yok eder.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -47,6 +48,9 @@ _FLOOR_DB = 80.0
 # cerceve ortusen sahte mukemmel eslesmeleri eler.
 _MIN_OVERLAP_FRACTION = 0.5
 _MIN_OVERLAP_FRAMES = 50
+
+# `_normalised_correlation` gecikme blogu (nokta).
+_LAG_BLOCK = 1 << 16
 
 
 @dataclass(frozen=True)
@@ -90,20 +94,42 @@ class CoarseMatch:
     overlap_frames: int
 
 
-def _log_energy(x: np.ndarray, window: int, hop: int) -> np.ndarray:
-    """Cerceve basina dB cinsinden enerji.
+def _frame_energy(chunks: Iterable[np.ndarray], window: int, hop: int) -> tuple[np.ndarray, int]:
+    """Cerceve basina ortalama enerji ve toplam ornek sayisi, AKISLI.
+
+    Sinyalin tamami hic bellekte tutulmaz: parca sinirinda yalnizca bir
+    sonraki cercevenin baslangicindan itibaren kalan kuyruk tasinir, bu yuzden
+    cerceveler tek parca hesaplamayla birebir aynidir. Tum dosyayi birlestirip
+    float64'e cevirmek ve ortusen pencere matrisini kurmak 60 dakikalik bir
+    dosyada ~900 MB tutuyordu (denetim D5).
+    """
+    parts: list[np.ndarray] = []
+    carry = np.zeros(0, dtype=np.float64)
+    total = 0
+    for chunk in chunks:
+        x = np.asarray(chunk, dtype=np.float64).reshape(-1)
+        total += x.size
+        buffer = np.concatenate([carry, x]) if carry.size else x
+        if buffer.size < window:
+            carry = buffer
+            continue
+        count = 1 + (buffer.size - window) // hop
+        frames = np.lib.stride_tricks.sliding_window_view(buffer, window)[::hop][:count]
+        parts.append(np.mean(np.square(frames), axis=1))
+        carry = buffer[count * hop :].copy()
+    energy = np.concatenate(parts) if parts else np.zeros(0, dtype=np.float64)
+    return energy, total
+
+
+def _to_db(energy: np.ndarray) -> np.ndarray:
+    """Enerjiyi dB'ye cevirir.
 
     Taban en yuksek cerceveye GORE belirlenir; boylece zarf kaydin mutlak
     seviyesinden bagimsizdir ve sessizlik -inf yerine sonlu bir degere oturur.
     """
-    if x.size < window:
-        return np.zeros(0, dtype=np.float64)
-    count = 1 + (x.size - window) // hop
-    frames = np.lib.stride_tricks.sliding_window_view(x, window)[::hop][:count]
-    energy = np.mean(np.square(frames, dtype=np.float64), axis=1)
     peak = float(energy.max()) if energy.size else 0.0
     if peak <= 0.0:
-        return np.zeros(count, dtype=np.float64)
+        return np.zeros(energy.size, dtype=np.float64)
     floor = peak * 10.0 ** (-_FLOOR_DB / 10.0)
     result: np.ndarray = 10.0 * np.log10(np.maximum(energy, floor))
     return result
@@ -134,21 +160,43 @@ def from_samples(
 ) -> Envelope:
     """Mono ornek dizisinden zarf uretir. Saf fonksiyon, ffmpeg gerektirmez."""
     ensure_signal(x, "samples")
+    return from_chunks(
+        [x], sample_rate, hop_ms=hop_ms, window_ms=window_ms, keep_samples=keep_samples
+    )
+
+
+def from_chunks(
+    chunks: Iterable[np.ndarray],
+    sample_rate: int,
+    *,
+    hop_ms: float = DEFAULT_HOP_MS,
+    window_ms: float = DEFAULT_WINDOW_MS,
+    keep_samples: bool = True,
+) -> Envelope:
+    """Parca parca gelen mono orneklerden zarf uretir; bellek parca boyuyla sinirli.
+
+    `keep_samples` ise ornekler int16 olarak saklanir (tek dogrusal kalem:
+    8 kHz'te dakikada 0.96 MB).
+    """
     if sample_rate <= 0:
         raise ValueError("sample_rate pozitif olmali")
     hop = max(1, round(sample_rate * hop_ms / 1000.0))
     window = max(hop, round(sample_rate * window_ms / 1000.0))
+    kept: list[np.ndarray] = []
 
-    values = _zscore(_log_energy(x.astype(np.float64, copy=False), window, hop))
-    samples = None
-    if keep_samples and x.size:
-        samples = np.clip(x * 32767.0, -32768, 32767).astype(np.int16)
+    def tee() -> Iterator[np.ndarray]:
+        for chunk in chunks:
+            if keep_samples and chunk.size:
+                kept.append(np.clip(chunk.reshape(-1) * 32767.0, -32768, 32767).astype(np.int16))
+            yield chunk
+
+    energy, total = _frame_energy(tee(), window, hop)
     return Envelope(
-        values=values.astype(np.float32),
+        values=_zscore(_to_db(energy)).astype(np.float32),
         hop_hz=sample_rate / hop,
         sample_rate=sample_rate,
-        duration_s=x.size / sample_rate,
-        samples=samples,
+        duration_s=total / sample_rate,
+        samples=np.concatenate(kept) if kept else None,
     )
 
 
@@ -168,7 +216,6 @@ def build(
     Video izi HIC cozulmez (`pcm_args` zorunlu `-vn -sn -dn` uygular), yani
     20 GB'lik bir konteynerde maliyet ses izininkiyle aynidir.
     """
-    blocks: list[np.ndarray] = []
     with open_pcm(
         ffmpeg,
         path,
@@ -178,23 +225,15 @@ def build(
         rate=rate,
         cancel=cancel,
     ) as stream:
-        for block in stream.blocks(rate):
-            blocks.append(block.reshape(-1).copy())
-    if not blocks:
-        return Envelope(
-            values=np.zeros(0, dtype=np.float32),
-            hop_hz=rate / max(1, int(rate * hop_ms / 1000)),
-            sample_rate=rate,
-            duration_s=0.0,
-            samples=None,
+        # Bloklar okuyucunun tamponuna bakan gorunumler olabilir; `from_chunks`
+        # her blogu hemen tuketir ve tasidigi kuyrugu kopyalar.
+        return from_chunks(
+            (block.reshape(-1) for block in stream.blocks(rate)),
+            rate,
+            hop_ms=hop_ms,
+            window_ms=window_ms,
+            keep_samples=keep_samples,
         )
-    return from_samples(
-        np.concatenate(blocks),
-        rate,
-        hop_ms=hop_ms,
-        window_ms=window_ms,
-        keep_samples=keep_samples,
-    )
 
 
 def _prefix(x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -223,7 +262,27 @@ def _normalised_correlation(
     n, m = a.size, b.size
     size = 1 << int(np.ceil(np.log2(n + m)))
     cross = np.fft.irfft(np.conj(np.fft.rfft(a, size)) * np.fft.rfft(b, size), size)
+    sums = (*_prefix(a), *_prefix(b))
 
+    # Gecikmeler bloklar halinde islenir: asagidaki ~15 ara dizi tum aralik
+    # boyunda kurulunca 60 dakikalik kayitta 177 MB tutuyordu (denetim D5).
+    rho = np.zeros(lags.size, dtype=np.float64)
+    counts = np.zeros(lags.size, dtype=np.int64)
+    for start in range(0, lags.size, _LAG_BLOCK):
+        block = slice(start, start + _LAG_BLOCK)
+        rho[block], counts[block] = _correlation_block(cross[block], lags[block], n, m, sums)
+    return rho, counts
+
+
+def _correlation_block(
+    cross: np.ndarray,
+    lags: np.ndarray,
+    n: int,
+    m: int,
+    sums: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+) -> tuple[np.ndarray, np.ndarray]:
+    """`_normalised_correlation`in bir gecikme blogu."""
+    sum_a, sq_a, sum_b, sq_b = sums
     # Gecikme k icin a uzerindeki ortusme araligi [lo, hi)
     lo = np.maximum(0, -lags)
     hi = np.minimum(n, m - lags)
@@ -233,8 +292,6 @@ def _normalised_correlation(
     hi_s = np.where(safe, hi, 0)
     shift = np.where(safe, lags, 0)
 
-    sum_a, sq_a = _prefix(a)
-    sum_b, sq_b = _prefix(b)
     total_a = sum_a[hi_s] - sum_a[lo_s]
     total_aa = sq_a[hi_s] - sq_a[lo_s]
     total_b = sum_b[hi_s + shift] - sum_b[lo_s + shift]
