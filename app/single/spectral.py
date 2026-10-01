@@ -41,6 +41,9 @@ FFT_SIZE = 4096
 _REF_LO_HZ, _REF_HI_HZ = 1000.0, 4000.0
 # Diz aramasi bu frekansin ustunde; alti kesim degil icerik.
 _KNEE_SEARCH_FROM_HZ = 8000.0
+# Kesim medyani dusukse arama kesimin bu kadar altindan baslar, en az bu Hz'ten.
+_KNEE_BELOW_CUTOFF_HZ = 1500.0
+_KNEE_SEARCH_MIN_HZ = 2000.0
 # Dusus penceresi (Hz): dizin egimi bu genislikte olculur.
 _DROP_WINDOW_HZ = 500.0
 # Taban bolgesi dizin bu kadar ustunden Nyquist'in bu kesrine kadar.
@@ -184,7 +187,16 @@ class _Accumulator:
         smooth = _smooth(ltas_db[None, :], _SMOOTH_BINS)[0]
         smooth_freqs = self._smooth_freqs
         drop_bins = self._drop_bins
-        start = int(np.searchsorted(smooth_freqs, _KNEE_SEARCH_FROM_HZ))
+        # -- cerceve basina kesim -------------------------------------------------
+        cutoffs = np.concatenate(self._cutoffs)
+        q25, q50, q75 = np.percentile(cutoffs, [25, 50, 75])
+        # Diz aramasi 8 kHz'ten basliyordu; 32/48 kbps MP3'un 4-8 kHz'teki
+        # duvari hic gorulmuyor ve 10 dosyanin 5'i "belirsiz" cikiyordu (denetim
+        # D12). Kesim daha asagidaysa arama kesimin biraz altindan baslar.
+        search_from = float(
+            np.clip(q50 - _KNEE_BELOW_CUTOFF_HZ, _KNEE_SEARCH_MIN_HZ, _KNEE_SEARCH_FROM_HZ)
+        )
+        start = int(np.searchsorted(smooth_freqs, search_from))
         stop = smooth_freqs.size - drop_bins
         if self.top_hz is not None:
             stop = min(
@@ -197,10 +209,6 @@ class _Accumulator:
             drops = smooth[start + drop_bins : stop + drop_bins] - smooth[start:stop]
             at = int(np.argmin(drops)) + start
             return at, float(smooth_freqs[at] + _DROP_WINDOW_HZ / 2.0), float(-drops[at - start])
-
-        # -- cerceve basina kesim -------------------------------------------------
-        cutoffs = np.concatenate(self._cutoffs)
-        q25, q50, q75 = np.percentile(cutoffs, [25, 50, 75])
 
         at, knee_hz, knee_drop = knee(stop)
         floor_hi = _FLOOR_TOP_FRACTION * sample_rate / 2.0

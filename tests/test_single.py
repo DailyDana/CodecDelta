@@ -459,3 +459,42 @@ def test_an_anti_alias_filter_does_not_hide_a_dark_recording(filter_hz: float) -
     evidence = analyse(filtered)
     assert evidence.antialias_hz == pytest.approx(filter_hz, abs=400)
     assert evidence.knee_hz < filter_hz - 500
+
+
+@pytest.mark.needs_ffmpeg
+@pytest.mark.parametrize("kbps", [32, 48])
+def test_a_low_bitrate_mp3_wall_below_8_khz_is_found(
+    ffmpeg_tools: FFmpegTools, tmp_path: Path, kbps: int
+) -> None:
+    """Diz aramasi 8 kHz'ten basliyordu; 4-8 kHz duvari gorulmuyordu (D12)."""
+    ff = str(ffmpeg_tools.ffmpeg)
+    clean = tmp_path / "clean.flac"
+    subprocess.run(
+        [
+            ff,
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "anoisesrc=color=pink:sample_rate=44100:duration=20:seed=5,tremolo=f=1.1:d=0.85",
+            "-ac",
+            "2",
+            "-c:a",
+            "flac",
+            str(clean),
+        ],
+        check=True,
+    )
+    lossy = tmp_path / "low.mp3"
+    subprocess.run(
+        [ff, "-v", "error", "-i", str(clean), "-c:a", "libmp3lame", "-b:a", f"{kbps}k", str(lossy)],
+        check=True,
+    )
+    transcode = tmp_path / "low.flac"
+    subprocess.run(
+        [ff, "-v", "error", "-i", str(lossy), "-c:a", "flac", str(transcode)], check=True
+    )
+    result = verdict.verify(ffmpeg_tools.ffmpeg, probe(ffmpeg_tools.ffprobe, transcode))
+    assert result.bucket == "consistent_lossy", result
+    assert result.spectral is not None and result.spectral.knee_hz < 8000

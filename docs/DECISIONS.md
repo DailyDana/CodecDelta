@@ -885,3 +885,8 @@ Bulgular ve durumlari: `docs/AUDIT-2026-09.md`.
   soylemiyordu. Bu kuralla 231 dosyanin hukmu (dogal ve 96 kHz) degismedi.
   DOGRULANMADI: 2 kHz sentetik bir kayittan; gercek karanlik + anti-alias
   kayit sette yok.
+- **D12 -- diz aramasi kesime gore baslar.** Kesim medyani dusukse diz aramasi
+  kesimin 1.5 kHz altindan (en az 2 kHz) basliyor; once hep 8 kHz'ten basliyordu
+  ve 32/48 kbps MP3'un 4-8 kHz duvari gorulmuyordu. 5 gercek parcanin
+  32/48/64 kbps MP3'u: once 15'te 10 "kayipli", simdi 15'te 15. 231 dosyanin
+  hukmu degismedi.
