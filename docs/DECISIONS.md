@@ -875,3 +875,13 @@ Bulgular ve durumlari: `docs/AUDIT-2026-09.md`.
   atlaniyor. Uc temel konum kullanilabilir pencere vermezse alti ek konum
   deneniyor; zayif ama kullanilabilir sonucta (farkli master) ek konuma
   gecilmiyor, maliyet degismiyor.
+- **D11 -- anti-alias duvari diz degildir.** Diz Nyquist'e yakin dik bir
+  duvarsa (kaydin anti-alias filtresi) analiz dizi ve tabani o duvarin altinda
+  yeniden ariyor; duvar yalnizca not. Karanlik ama kayipsiz kayit + keskin
+  filtre, filtresiz haliyle ayni hukmu aliyor ("belirsiz"; once "kayipli").
+  Yeni diz ancak kesim medyanina 2 kHz'ten yakinsa kullaniliyor: ilk surum iki
+  kayipli dosyayi (MP3 V0, AAC 128) "belirsiz"e cekti, cunku duvarin altindaki
+  diz kesimden 5.7 / 8.8 kHz uzakti ve icerigin bitisi hakkinda bir sey
+  soylemiyordu. Bu kuralla 231 dosyanin hukmu (dogal ve 96 kHz) degismedi.
+  DOGRULANMADI: 2 kHz sentetik bir kayittan; gercek karanlik + anti-alias
+  kayit sette yok.

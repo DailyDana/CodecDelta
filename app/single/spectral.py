@@ -34,6 +34,7 @@ import numpy as np
 from app.core.ffmpeg_runner import CancelToken
 from app.core.ffmpeg_stream import open_pcm
 from app.dsp.stft import StreamingStft, hann
+from app.single import thresholds
 
 FFT_SIZE = 4096
 # Referans bandi: seviye normalizasyonu icin. Muzigin enerjisi buradadir.
@@ -55,6 +56,9 @@ _SMOOTH_BINS = 5
 # gercek dizi golgeliyordu (96 kHz'e buyutulmus MP3 V0'da 21.3 kHz'teki yumusak
 # diz yerine 21.8 kHz'teki resampler duvari secildi).
 _RESAMPLED_TOP_FRACTION = 0.985
+# Anti-alias duvarinin altinda bulunan diz, kesim medyanina bu kadar yakinsa
+# kullanilir (bkz. `_Accumulator.finish`).
+_ANTIALIAS_KNEE_PROXIMITY_HZ = 2000.0
 
 
 @dataclass(frozen=True)
@@ -76,6 +80,10 @@ class SpectralEvidence:
     # Uzun donem spektrum (dB, referansa gore) ve frekans ekseni; rapor icin.
     ltas_rel_db: np.ndarray
     freqs_hz: np.ndarray
+    # Nyquist'e yakin dik duvar (kaydin anti-alias filtresi) bulunduysa konumu
+    # ve dususu; diz ve taban bu durumda duvarin ALTINDA aranir. Yoksa NaN.
+    antialias_hz: float = math.nan
+    antialias_drop_db: float = math.nan
 
     @property
     def nyquist_hz(self) -> float:
@@ -184,22 +192,47 @@ class _Accumulator:
             )
         if stop <= start:
             return empty
-        drops = smooth[start + drop_bins : stop + drop_bins] - smooth[start:stop]
-        at = int(np.argmin(drops)) + start
-        knee_hz = float(smooth_freqs[at] + _DROP_WINDOW_HZ / 2.0)
-        knee_drop = float(-drops[at - start])
 
-        # -- diz sonrasi taban ---------------------------------------------------
-        floor_lo = knee_hz + _FLOOR_GAP_HZ
-        floor_hi = _FLOOR_TOP_FRACTION * sample_rate / 2.0
-        if self.top_hz is not None:
-            floor_hi = min(floor_hi, self.top_hz)
-        floor_band = (freqs >= floor_lo) & (freqs <= floor_hi)
-        floor_rel = float(rel[floor_band].mean()) if floor_band.sum() >= 4 else math.nan
+        def knee(stop: int) -> tuple[int, float, float]:
+            drops = smooth[start + drop_bins : stop + drop_bins] - smooth[start:stop]
+            at = int(np.argmin(drops)) + start
+            return at, float(smooth_freqs[at] + _DROP_WINDOW_HZ / 2.0), float(-drops[at - start])
 
         # -- cerceve basina kesim -------------------------------------------------
         cutoffs = np.concatenate(self._cutoffs)
         q25, q50, q75 = np.percentile(cutoffs, [25, 50, 75])
+
+        at, knee_hz, knee_drop = knee(stop)
+        floor_hi = _FLOOR_TOP_FRACTION * sample_rate / 2.0
+        if self.top_hz is not None:
+            floor_hi = min(floor_hi, self.top_hz)
+        antialias_hz = antialias_drop = math.nan
+        nyquist = sample_rate / 2.0
+        if (
+            knee_drop > thresholds.BRICKWALL_DROP_DB
+            and knee_hz >= thresholds.MAX_LOSSY_CUTOFF_NYQUIST_FRACTION * nyquist
+            and at - drop_bins + 1 > start
+        ):
+            # Nyquist'e yakin dik duvar kaydin anti-alias filtresidir; ustu
+            # filtrenin sondurme bandi. Diz orada aranirsa karanlik ama kayipsiz
+            # bir kaydin yumusak dogal inisi gorunmuyor, sondurme bandi da "diz
+            # ustunde hicbir sey yok" diye kanit sayiliyordu (denetim D11).
+            below = knee(at - drop_bins + 1)
+            # Duvarin altindaki diz ancak icerigin bittigi yere (kesim medyani)
+            # yakinsa o bitisi anlatir. Uzaksa (MP3 V0: kesim 16.0, diz 21.7 kHz;
+            # AAC: kesim 20.0, diz 11.2 kHz) bir sey soylemez ve iki kayipli
+            # dosyayi "belirsiz"e cekiyordu; o durumda eski davranis kalir.
+            # DOGRULANMADI: 2 kHz'lik yakinlik sentetik karanlik kayittan
+            # (1.55 kHz); gercek karanlik + anti-alias kayit sette yok.
+            if abs(below[1] - float(q50)) <= _ANTIALIAS_KNEE_PROXIMITY_HZ:
+                antialias_hz, antialias_drop = knee_hz, knee_drop
+                floor_hi = min(floor_hi, float(smooth_freqs[at]))
+                at, knee_hz, knee_drop = below
+
+        # -- diz sonrasi taban ---------------------------------------------------
+        floor_lo = knee_hz + _FLOOR_GAP_HZ
+        floor_band = (freqs >= floor_lo) & (freqs <= floor_hi)
+        floor_rel = float(rel[floor_band].mean()) if floor_band.sum() >= 4 else math.nan
 
         # -- side ------------------------------------------------------------------
         side_hf = math.nan
@@ -225,6 +258,8 @@ class _Accumulator:
             side_hf_rel_db=side_hf,
             ltas_rel_db=rel.astype(np.float32),
             freqs_hz=freqs,
+            antialias_hz=antialias_hz,
+            antialias_drop_db=antialias_drop,
         )
 
 

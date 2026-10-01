@@ -437,3 +437,25 @@ def test_a_silent_middle_moves_the_excerpt(ffmpeg_tools: FFmpegTools, tmp_path: 
     result = verdict.verify(ffmpeg_tools.ffmpeg, probe(ffmpeg_tools.ffprobe, path))
     assert result.bucket == "consistent_lossless", result
     assert any(getattr(n, "key", "") == "single.moved_excerpt" for n in result.notes)
+
+
+@pytest.mark.parametrize("filter_hz", [21_000.0, 21_500.0])
+def test_an_anti_alias_filter_does_not_hide_a_dark_recording(filter_hz: float) -> None:
+    """Karanlik kayit + dik anti-alias filtresi "kayipli" cikiyordu (D11).
+
+    Diz filtreye oturuyor ve yumusak dogal inis (karsi-kanit) gorunmuyordu.
+    Filtreli hukum filtresizle ayni olmali; filtre yalnizca not.
+    """
+    x = pink(5)
+    f = freqs_of(x)
+    dark = shape(x, np.where(f > 9000, -5.4 * (f - 9000) / 1000, 0.0))
+
+    def bucket(signal: np.ndarray) -> str:
+        reasons, counter, notes = verdict.judge_spectral(analyse(signal))
+        return verdict.combine(reasons, counter, notes)
+
+    filtered = brickwall(dark, filter_hz, floor_db=-110)
+    assert bucket(filtered) == bucket(dark) != "consistent_lossy"
+    evidence = analyse(filtered)
+    assert evidence.antialias_hz == pytest.approx(filter_hz, abs=400)
+    assert evidence.knee_hz < filter_hz - 500

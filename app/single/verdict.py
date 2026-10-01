@@ -98,6 +98,13 @@ def judge_spectral(evidence: SpectralEvidence) -> tuple[list[str], list[str], li
     # 23.7 kHz'de 60-80 dB, gercek CD 21.1-21.2 kHz'de 17-24 dB. Codec dizleri
     # en fazla 20.9 kHz (Vorbis, 44.1'de 0.948 Nyquist).
     wall_near_nyquist = wall and knee_hz >= thresholds.MAX_LOSSY_CUTOFF_NYQUIST_FRACTION * nyquist
+    # Analiz, Nyquist'e yakin anti-alias duvarini ayri tutar ve dizi onun altinda
+    # arar (bkz. `SpectralEvidence.antialias_hz`).
+    antialias = not math.isnan(evidence.antialias_hz)
+    if antialias:
+        wall_hz, wall_drop = evidence.antialias_hz, evidence.antialias_drop_db
+    else:
+        wall_hz, wall_drop = knee_hz, drop
 
     if not low_cutoff:
         # Ana kapi: icerik Nyquist'e kadar. Olculen hicbir seffaf-olmayan codec
@@ -109,16 +116,16 @@ def judge_spectral(evidence: SpectralEvidence) -> tuple[list[str], list[str], li
                 khz=cutoff / 1000,
             )
         )
-        if wall:
+        if wall or antialias:
             notes.append(
                 Message(
                     "single.antialias_note",
                     "steep filter at {khz:.1f} kHz ({drop:.0f} dB within 500 Hz, {pct:.0f}% of "
                     "Nyquist): typical of the recording's anti-alias or sample-rate "
                     "conversion filter",
-                    khz=knee_hz / 1000,
-                    drop=drop,
-                    pct=100 * knee_hz / nyquist,
+                    khz=wall_hz / 1000,
+                    drop=wall_drop,
+                    pct=100 * wall_hz / nyquist,
                 )
             )
         return reasons, counter, notes
@@ -151,6 +158,16 @@ def judge_spectral(evidence: SpectralEvidence) -> tuple[list[str], list[str], li
             )
         )
 
+    if antialias:
+        notes.append(
+            Message(
+                "single.antialias_low",
+                "steep filter at {khz:.1f} kHz is at {pct:.0f}% of Nyquist: an anti-alias "
+                "filter, not evidence",
+                khz=wall_hz / 1000,
+                pct=100 * wall_hz / nyquist,
+            )
+        )
     if wall and not wall_near_nyquist:
         reasons.append(
             Message(
