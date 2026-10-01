@@ -69,6 +69,11 @@ _MIN_WINDOW_FRAMES = 4096
 # Ilk pencere sessizlige ya da alkisa denk gelirse denenecek diger konumlar
 # (ortusmenin kesri olarak).
 _POSITIONS = (0.5, 0.25, 0.75)
+# Bunlardan hicbiri kullanilabilir bir pencere vermezse denenecek ek konumlar.
+# Ortasi uzun sessiz bir dosyada uc pencere de sessizlige dusuyordu (D8).
+_FALLBACK_POSITIONS = (0.1, 0.9, 0.4, 0.6, 0.0, 1.0)
+# Zarfin bu kadarindan fazlasi sessizlik tabanindaysa pencere okunmaz bile.
+_MAX_SILENT_FRACTION = 0.5
 
 # Saat kaymasi izlenecekse ince gecikme bu noktalarin HEPSINDE olculur ve
 # pipeline noktalardan bir dogru gecirir. Surukelenme tahmininin egimi
@@ -124,6 +129,28 @@ class AlignmentPlan:
     def comparable(self) -> bool:
         """Uzerine codec farki olcumu kurulabilir mi?"""
         return self.verdict == "aligned"
+
+
+def _mostly_silent(env: Envelope, start_s: float, length_s: float) -> bool:
+    """Referans zarfinin bu araliginin cogu sessizlik tabaninda mi?
+
+    Zarf degerleri z-skorlu log-enerji; dijital sessizlik ve -80 dB alti
+    `envelope` tabanina kelepcelenir, yani hepsi tam olarak en kucuk degerdedir.
+    Taban medyanin belirgin altinda degilse (dinamigi duz icerik) sessizlik
+    yoktur.
+    """
+    values = env.values
+    if values.size == 0:
+        return False
+    floor = float(values.min())
+    if floor > float(np.median(values)) - 1.0:
+        return False
+    lo = max(0, int(start_s * env.hop_hz))
+    hi = max(lo, int((start_s + length_s) * env.hop_hz))
+    window = values[lo:hi]
+    if window.size == 0:
+        return False
+    return float(np.mean(window <= floor + 1e-3)) > _MAX_SILENT_FRACTION
 
 
 def _window_frames(sample_rate: int, window_s: float, drift: DriftEstimate | None) -> int:
@@ -300,12 +327,24 @@ def build(
 
     tracking = drift is not None and drift.needs_tracking
     points: list[_Point] = []
-    for fraction in _TRACK_POSITIONS if tracking else _POSITIONS:
+    positions = list(_TRACK_POSITIONS if tracking else _POSITIONS)
+    extended = tracking
+    index = 0
+    while True:
+        if index == len(positions):
+            if points or extended:
+                break
+            positions.extend(_FALLBACK_POSITIONS)
+            extended = True
+        fraction = positions[index]
+        index += 1
         test_start = int(lo_s * sample_rate) + int((span - frames) * fraction)
         position_s = (test_start + frames / 2) / sample_rate
         coarse = round(coarse_delay_at(position_s) * sample_rate)
         ref_start = test_start - coarse
         if ref_start < 0:
+            continue
+        if _mostly_silent(reference_env, ref_start / sample_rate, frames / sample_rate):
             continue
 
         ref_block = np.asarray(read_reference(ref_start, frames), dtype=np.float64)

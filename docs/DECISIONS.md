@@ -869,3 +869,9 @@ Bulgular ve durumlari: `docs/AUDIT-2026-09.md`.
   kayitta taban NaN (manset NaN) ve dogrulama "belirsiz" cikiyordu. Kesit
   kullanilamazsa sirayla ceyrekler ve kenarlara yakin konumlar deneniyor; ek
   maliyet yalnizca sessiz durumda. Dogrulamada kesit kaydirildiysa not dusuluyor.
+- **D8 -- sessiz pencere okunmaz.** Plan L2 penceresini okumadan once referans
+  zarfina bakiyor: araligin yarisindan fazlasi sessizlik tabanindaysa (dijital
+  sessizlik ve -80 dB alti zarfta tam olarak en kucuk degerdedir) pencere
+  atlaniyor. Uc temel konum kullanilabilir pencere vermezse alti ek konum
+  deneniyor; zayif ama kullanilabilir sonucta (farkli master) ek konuma
+  gecilmiyor, maliyet degismiyor.

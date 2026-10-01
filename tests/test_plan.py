@@ -261,3 +261,15 @@ def test_heavy_eq_is_not_mistaken_for_a_periodic_signal() -> None:
     reference = stereo(40.0, seed=11)
     result = run(reference, lowpass(delayed(reference, 300), 0.15))
     assert result.drift is not None and not result.drift.periodic
+
+
+def test_a_long_silent_middle_still_aligns() -> None:
+    """Uc analiz penceresi de sessizlige dusunce "hizalanamadi" deniyordu (D8)."""
+    reference = np.concatenate(
+        [stereo(20.0, seed=31), np.zeros((100 * RATE, 2)), stereo(20.0, seed=32)]
+    )
+    test = delayed(reference, 250)
+    test = test + np.random.default_rng(5).standard_normal(test.shape) * 1e-3
+    result = run(reference, test)
+    assert result.verdict == "aligned", result.reasons
+    assert result.delay_samples == pytest.approx(250, abs=0.05)
