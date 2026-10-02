@@ -338,3 +338,33 @@ def test_tagging_library_vendor_is_not_an_encoder() -> None:
     genuine = FlacInfo(stream_info=info, vendor="reference libFLAC 1.4.2 20221022")
     assert genuine.encoder_family == "reference libFLAC"
     assert not genuine.vendor_rewritten
+
+
+@pytest.mark.needs_ffmpeg
+def test_verify_md5_of_a_24_bit_flac(ffmpeg_tools: FFmpegTools, tmp_path: Path) -> None:
+    """md5 muxer s16'ya cevirdigi icin her 24-bit FLAC False cikiyordu (G1)."""
+    import subprocess
+
+    media = tmp_path / "hires.flac"
+    subprocess.run(
+        [
+            str(ffmpeg_tools.ffmpeg),
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "anoisesrc=sample_rate=96000:duration=2",
+            "-ac",
+            "2",
+            "-sample_fmt",
+            "s32",
+            "-c:a",
+            "flac",
+            str(media),
+        ],
+        check=True,
+    )
+    info = flac.scan(media)
+    assert info is not None and info.stream_info.bits_per_sample == 24
+    assert flac.verify_md5(ffmpeg_tools.ffmpeg, media, info.stream_info) is True

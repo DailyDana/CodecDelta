@@ -311,6 +311,10 @@ def scan(path: Path) -> FlacInfo | None:
     )
 
 
+# Bit derinligi -> MD5'in hesaplandigi PCM bicimi.
+_MD5_CODECS = {8: "pcm_s8", 16: "pcm_s16le", 24: "pcm_s24le", 32: "pcm_s32le"}
+
+
 def verify_md5(
     ffmpeg: Path,
     path: Path,
@@ -331,6 +335,13 @@ def verify_md5(
     """
     if not stream_info.md5_present:
         return None
+    # FLAC'in MD5'i orijinal bit derinliginde, kucuk-endian isaretli orneklerin
+    # ozetidir. md5 muxer varsayilan olarak s16'ya cevirdigi icin her 24-bit
+    # FLAC "uyusmuyor" cikiyordu (denetim G1). 20 bit gibi tam bayta oturmayan
+    # derinlikte ffmpeg ornekleri olcekler; o durumda dogrulanamaz.
+    pcm = _MD5_CODECS.get(stream_info.bits_per_sample)
+    if pcm is None:
+        return None
     run = run_capture(
         ffmpeg,
         [
@@ -341,6 +352,8 @@ def verify_md5(
             str(path),
             "-map",
             "0:a:0",
+            "-c:a",
+            pcm,
             "-f",
             "md5",
             "-",
