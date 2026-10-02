@@ -13,13 +13,15 @@
 # Yapi sonunda exe bir "duman testi" ile calistirilir (--smoke-test): pencere
 # kurulur, surum ve bulunan ffmpeg JSON'a yazilir, uygulama hemen kapanir.
 # Test gecmezse betik hata verir; bozuk bir yapi zip'lenmez.
-param([switch]$NoZip)
+#
+# -Python <yol>: .venv yerine baska bir yorumlayici (CI'da sistem Python'u).
+param([switch]$NoZip, [string]$Python = '')
 
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
-$Py = Join-Path $Root '.venv\Scripts\python.exe'
-if (-not (Test-Path -LiteralPath $Py)) {
-    throw "Sanal ortam yok: $Py  (uv venv --python 3.14 .venv; uv pip install -e .[dev])"
+$Py = if ($Python) { $Python } else { Join-Path $Root '.venv\Scripts\python.exe' }
+if (-not $Python -and -not (Test-Path -LiteralPath $Py)) {
+    throw "Sanal ortam yok: $Py  (uv venv --python 3.14 .venv; uv pip install -e .[dev]) ya da -Python verin"
 }
 Push-Location $Root
 try {
