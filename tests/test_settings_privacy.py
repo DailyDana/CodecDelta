@@ -232,3 +232,20 @@ def test_scrub_keeps_words_that_only_contain_the_username(
     out = privacy.scrub("alignment by ali, Ali and ALI")
     assert out.startswith("alignment by <REDACTED>")
     assert "ali" not in out.lower().replace("alignment", "")
+
+
+def test_settings_with_a_bom_are_read(tmp_path: Path) -> None:
+    """Not Defteri BOM'lu kaydeder; tum ayarlar sessizce sifirlaniyordu (D40)."""
+    import codecs
+
+    target = tmp_path / "settings.json"
+    target.write_bytes(codecs.BOM_UTF8 + b'{"language": "tr", "output_dir": "D:/out"}')
+    loaded = load(target)
+    assert loaded.language == "tr" and loaded.output_dir == "D:/out"
+
+
+def test_absurdly_nested_settings_fall_back_to_defaults(tmp_path: Path) -> None:
+    """Asiri derin JSON RecursionError firlatiyordu (D40)."""
+    target = tmp_path / "settings.json"
+    target.write_text("[" * 100_000 + "]" * 100_000, encoding="utf-8")
+    assert load(target) == Settings()
