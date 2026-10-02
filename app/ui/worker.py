@@ -20,6 +20,7 @@ from PyQt6.QtCore import QObject, Qt, QThread, pyqtSignal, pyqtSlot
 
 from app.core.errors import CancelledError, CodecDeltaError
 from app.core.ffmpeg_runner import CancelToken
+from app.ui.i18n import localize
 
 JobFn = Callable[[CancelToken, Callable[[str], None]], object]
 
@@ -46,7 +47,8 @@ class _Job(QObject):
             if self._token.cancelled:
                 self.cancelled.emit()
             elif isinstance(exc, CodecDeltaError):
-                self.failed.emit(exc.user_message())
+                # Ileti bir `Message` ise arayuzun dilinde (D28).
+                self.failed.emit(localize(exc.args[0]) if exc.args else exc.user_message())
             else:
                 self.failed.emit("".join(traceback.format_exception_only(exc)).strip())
         else:

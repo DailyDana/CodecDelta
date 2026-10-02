@@ -20,6 +20,7 @@ from pathlib import Path
 
 from app.core.errors import ProbeError
 from app.core.ffmpeg_runner import CancelToken, run_capture
+from app.core.messages import Message
 
 # Kayipsiz kodekler. Arayuz "referans" tarafi icin bunlari onerir, ve
 # referanssiz dogrulama modu yalnizca bunlar icin anlamlidir.
@@ -106,7 +107,14 @@ class Probe:
         for s in self.audio:
             if s.audio_index == audio_index:
                 return s
-        raise ProbeError(f"No audio track a:{audio_index} in {self.path.name}.")
+        raise ProbeError(
+            Message(
+                "probe.no_track",
+                "No audio track a:{index} in {name}.",
+                index=audio_index,
+                name=self.path.name,
+            )
+        )
 
 
 def _as_int(value: object) -> int | None:
@@ -133,7 +141,7 @@ def probe(
 ) -> Probe:
     """Dosyayi inceler. Ses izi yoksa `ProbeError` firlatir."""
     if not path.is_file():
-        raise ProbeError(f"File not found: {path}")
+        raise ProbeError(Message("probe.not_found", "File not found: {name}", name=path.name))
 
     run = run_capture(
         ffprobe,
@@ -145,6 +153,9 @@ def probe(
             "json",
             "-show_format",
             "-show_streams",
+            # `-i` sart: basinda "-" olan goreli bir yol aksi halde secenek
+            # saniliyordu (denetim D29).
+            "-i",
             str(path),
         ],
         timeout=timeout,
@@ -153,12 +164,22 @@ def probe(
     try:
         data = json.loads(run.stdout_text())
     except ValueError as exc:
-        raise ProbeError(f"ffprobe returned unreadable output for {path.name}.") from exc
+        raise ProbeError(
+            Message(
+                "probe.unreadable", "ffprobe returned unreadable output for {name}.", name=path.name
+            )
+        ) from exc
 
     streams = data.get("streams", [])
     fmt = data.get("format", {})
     if not isinstance(streams, list) or not isinstance(fmt, dict):
-        raise ProbeError(f"ffprobe returned an unexpected structure for {path.name}.")
+        raise ProbeError(
+            Message(
+                "probe.unexpected",
+                "ffprobe returned an unexpected structure for {name}.",
+                name=path.name,
+            )
+        )
 
     audio: list[AudioStreamInfo] = []
     has_video = False
@@ -205,7 +226,9 @@ def probe(
         audio_ordinal += 1
 
     if not audio:
-        raise ProbeError(f"{path.name} contains no audio track.")
+        raise ProbeError(
+            Message("probe.no_audio", "{name} contains no audio track.", name=path.name)
+        )
 
     fmt_tags = fmt.get("tags", {})
     fmt_tags = fmt_tags if isinstance(fmt_tags, dict) else {}

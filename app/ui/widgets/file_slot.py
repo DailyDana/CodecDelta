@@ -24,7 +24,7 @@ from PyQt6.QtWidgets import (
 
 from app.core.errors import CodecDeltaError
 from app.core.probe import Probe, default_stream, probe
-from app.ui.i18n import tr
+from app.ui.i18n import localize, tr
 
 MEDIA_FILTER = (
     "Media (*.flac *.wav *.aif *.aiff *.alac *.m4a *.mp4 *.mp3 *.opus *.ogg *.oga *.webm "
@@ -105,7 +105,7 @@ class FileSlot(QFrame):
             self.info = None
             self._name.setText(path.name)
             self._name.setObjectName("SlotName")
-            self._info.setText(exc.user_message())
+            self._info.setText(localize(exc.args[0]) if exc.args else exc.user_message())
             # Onceki dosyanin iz listesi kalmasin (D23).
             self._tracks.clear()
             self._tracks.hide()

@@ -520,7 +520,7 @@ class AnalyzeTab(QWidget):
         try:
             written = report_html.write(Path(path), html_text)
         except (OSError, CodecDeltaError) as exc:
-            message = exc.user_message() if isinstance(exc, CodecDeltaError) else str(exc)
+            message = exc.args[0] if isinstance(exc, CodecDeltaError) and exc.args else str(exc)
             QMessageBox.critical(self, tr("error.report"), localize(message))
             return
         self.stage.setText(tr("report.saved", name=written.name))
