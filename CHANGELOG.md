@@ -8,6 +8,37 @@ While the version is `0.x`, the API may break between minor versions.
 
 ## [Unreleased]
 
+Fixes from the September 2026 audit (`docs/AUDIT-2026-09.md`: 46 findings,
+all addressed). Highlights:
+
+### Fixed
+- **Edited files**: blocks that do not line up with the reference (a cut, a
+  different ending) are left out of the measurement and the report says how
+  much was left out; a file that mostly does not line up is not measured.
+  Before, an edited file read 0.7-3.0 dB instead of 21.7 dB.
+- **Multichannel**: mid is the average of all channels; a 5.1 file with its
+  content in the centre read -inf.
+- **Upsampled files**: a CD upsampled to 96 kHz is judged at 44.1 kHz and no
+  longer called lossy; 231 calibration files keep their verdicts.
+- **Test tones**: a steady tone is reported as ambiguous instead of a speed
+  change (+3004 ppm, "NTSC").
+- **Privacy audit**: a common user name (test, user, mark) no longer blocks
+  every report; a blocked report shows what was found.
+- **Memory**: a 60-minute comparison peaks at 267 MB instead of 1.9 GB;
+  verification stays near 7 MB at any sample rate.
+- Silent stretches, long silent middles, dual mono, dark recordings with an
+  anti-alias filter, 32/48 kbps MP3, partial overlaps, silent files, NaN
+  samples, empty files and short drifting clips are handled with a clear
+  result instead of NaN, a wrong verdict or a crash.
+- **Encode tab**: encoder limits are checked before encoding; unsupported
+  rates are converted explicitly with soxr instead of ffmpeg's default
+  resampler, and too many channels stop with a clear message.
+- **Interface**: closing during a job no longer freezes for 10 s; a language
+  switch keeps results, track choice and encode settings; error messages are
+  translated; several smaller state bugs.
+- Launcher, ffmpeg discovery, settings files with a BOM, FLAC 24-bit MD5,
+  chained Ogg and large FLAC covers.
+
 ## [0.2.0] - 2026-09-30
 
 ### Added
