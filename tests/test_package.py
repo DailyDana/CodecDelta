@@ -7,6 +7,7 @@ headless test ve CLI yolu kapanir, bu da geri donusu pahali bir hatadir.
 from __future__ import annotations
 
 import importlib
+from pathlib import Path
 
 import app
 
@@ -58,3 +59,35 @@ def test_engine_layers_do_not_import_qt() -> None:
         [sys.executable, "-c", script], capture_output=True, text=True, check=True
     )
     assert done.stdout.strip() == "[]", f"motor katmani Qt import etti: {done.stdout}"
+
+
+def test_smoke_test_flag(tmp_path: Path) -> None:
+    """`--smoke-test` pencereyi acmadan durum JSON'u yazar (build.ps1 buna dayanir)."""
+    import json
+    import os
+    import subprocess
+    import sys
+
+    out = tmp_path / "smoke.json"
+    # Kullanicinin ayar ve onbellegine dokunmasin.
+    env = {**os.environ, "QT_QPA_PLATFORM": "offscreen", "APPDATA": str(tmp_path)}
+    done = subprocess.run(
+        [sys.executable, "-m", "app", "--smoke-test", str(out)],
+        env=env,
+        capture_output=True,
+        timeout=120,
+        check=False,
+    )
+    data = json.loads(out.read_text(encoding="utf-8"))
+    assert data["version"] == app.__version__
+    assert data["report"] is True
+    if done.returncode == 0:
+        assert data["tabs"] == 4
+        assert data["error"] is None
+    else:
+        # ffmpeg'siz makine (CI): okunur hata, pencere kurulmadi.
+        assert done.returncode == 2
+        assert data["ffmpeg"] is None
+        assert data["error"]
+    if data["audio"] is not None:
+        assert data["audio"]["opened"] is True
