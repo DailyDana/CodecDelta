@@ -313,6 +313,7 @@ def coarse_match(
     test: Envelope,
     *,
     max_shift_s: float | None = None,
+    min_overlap_fraction: float = _MIN_OVERLAP_FRACTION,
 ) -> CoarseMatch:
     """Iki zarfi karsilastirip kaba gecikmeyi bulur.
 
@@ -337,7 +338,7 @@ def coarse_match(
 
     rho, counts = _normalised_correlation(a.astype(np.float64), b.astype(np.float64), lags)
 
-    minimum = max(_MIN_OVERLAP_FRAMES, int(_MIN_OVERLAP_FRACTION * min(a.size, b.size)))
+    minimum = max(_MIN_OVERLAP_FRAMES, int(min_overlap_fraction * min(a.size, b.size)))
     valid = counts >= minimum
     if not valid.any():
         # Ortusme her yerde yetersiz: dosyalardan biri digerinin yaninda cok kisa.

@@ -74,6 +74,9 @@ _POSITIONS = (0.5, 0.25, 0.75)
 _FALLBACK_POSITIONS = (0.1, 0.9, 0.4, 0.6, 0.0, 1.0)
 # Zarfin bu kadarindan fazlasi sessizlik tabanindaysa pencere okunmaz bile.
 _MAX_SILENT_FRACTION = 0.5
+# Zarf eslesmesi bu gevsek ortusme esigiyle guclu cikiyorsa dosyalar ayni kayit
+# ama az ortusuyor demektir; gerekce buna gore yazilir (hizalanmaz).
+_PARTIAL_OVERLAP_FRACTION = 0.15
 
 # Saat kaymasi izlenecekse ince gecikme bu noktalarin HEPSINDE olculur ve
 # pipeline noktalardan bir dogru gecirir. Surukelenme tahmininin egimi
@@ -151,6 +154,13 @@ def _mostly_silent(env: Envelope, start_s: float, length_s: float) -> bool:
     if window.size == 0:
         return False
     return float(np.mean(window <= floor + 1e-3)) > _MAX_SILENT_FRACTION
+
+
+def _is_silent(env: Envelope) -> bool:
+    """Zarf tamamen duz mu (dijital sessizlik ya da bos dosya)?"""
+    if env.samples is not None:
+        return not bool(np.any(env.samples))
+    return env.values.size == 0 or float(np.ptp(env.values)) == 0.0
 
 
 def _window_frames(sample_rate: int, window_s: float, drift: DriftEstimate | None) -> int:
@@ -287,6 +297,34 @@ def build(
     # -- "ayni kayit mi" ilk kapi -------------------------------------------
     if envelope.rho < MIN_ENVELOPE_CORRELATION:
         if not anchored:
+            # "Farkli kayit" demeden once iki baska aciklama: dosyalardan biri
+            # sessiz, ya da ayni kayit ama yarisindan azi ortusuyor. Ikisi de
+            # "farkli kayit" diye etiketleniyordu (denetim D34).
+            for env, which in ((reference_env, "reference"), (test_env, "test")):
+                if _is_silent(env):
+                    reasons.append(
+                        Message(
+                            "plan.silent",
+                            "the {which} file is silent: there is nothing to align",
+                            which=which,
+                        )
+                    )
+                    return result("unaligned")
+            partial = coarse_match(
+                reference_env, test_env, min_overlap_fraction=_PARTIAL_OVERLAP_FRACTION
+            )
+            shorter = min(reference_env.frames, test_env.frames)
+            if partial.rho >= MIN_ENVELOPE_CORRELATION and shorter:
+                reasons.append(
+                    Message(
+                        "plan.partial_overlap",
+                        "the files overlap for only {seconds:.0f} s ({percent:.0f}% of the "
+                        "shorter one): too little to align reliably",
+                        seconds=reference_env.seconds(partial.overlap_frames),
+                        percent=100.0 * partial.overlap_frames / shorter,
+                    )
+                )
+                return result("unaligned")
             reasons.append(
                 Message(
                     "plan.different_recording",

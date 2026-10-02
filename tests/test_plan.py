@@ -273,3 +273,20 @@ def test_a_long_silent_middle_still_aligns() -> None:
     result = run(reference, test)
     assert result.verdict == "aligned", result.reasons
     assert result.delay_samples == pytest.approx(250, abs=0.05)
+
+
+def test_a_silent_file_is_not_called_a_different_recording() -> None:
+    """Tamamen sessiz dosya "farkli kayit" diye etiketleniyordu (D34)."""
+    reference = stereo(30.0, seed=41)
+    result = run(reference, np.zeros_like(reference))
+    assert result.verdict == "unaligned"
+    assert any(getattr(r, "key", "") == "plan.silent" for r in result.reasons)
+
+
+def test_a_partial_overlap_is_not_called_a_different_recording() -> None:
+    """Yarisindan azi ortusen ayni kayit "farkli kayit" diye etiketleniyordu (D34)."""
+    reference = stereo(40.0, seed=43)
+    test = np.concatenate([reference[25 * RATE :], stereo(25.0, seed=44)])
+    result = run(reference, test)
+    assert result.verdict == "unaligned", result.reasons
+    assert any(getattr(r, "key", "") == "plan.partial_overlap" for r in result.reasons)
