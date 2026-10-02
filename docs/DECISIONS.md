@@ -948,3 +948,47 @@ Bulgular ve durumlari: `docs/AUDIT-2026-09.md`.
   yok: esik marjlari dar (20.75 kHz kapisi her iki yana ~120 Hz) ve kullanici
   verisiyle otomatik ayar dogrulanmadan yanlis pozitif uretebilir. v1.0 icin
   ayri ele alinacak.
+
+## Tarama, eslesme kalibrasyonu ve paketleme (v1.0.0)
+
+- **Bit hizi taramasi dar tutuldu**: tek codec, sabit merdiven 96/128/160/192/256
+  kbps (codec'in kabul ettikleriyle kesisim; kesisim yoksa codec araliginda 5
+  esit adim). Genel codec x bit hizi x ayar matrisi kurulmadi (plan karari).
+  Sonuc `ComparisonSet(sweep_axis="bitrate")`; dosyalar ABX'e gonderilebilsin
+  diye silinmiyor. Grafigin altinda sabit satir: olculen fark duyulabilirlik
+  degildir.
+- **Eslesme esikleri gercek veriyle** (`tools/calibrate_match.py`, 21 parca,
+  60 s kesitler): ayni kayit 210/210 hizali (zarf rho >= 0.995, ince |r| >=
+  0.990), farkli kayit 63/63 reddedildi (rho <= 0.420). Mevcut esikler bu
+  genis boslugun icinde kaldi, degistirilmedi. Ayrintili tablo
+  `app/align/thresholds.py` basinda.
+- **Farkli master SENTETIK** (equalizer + acompressor; gercek remaster cifti
+  yok). Ince |r| onu cok dusuk bit hizli kodlamadan ayiramiyor (en fazla 0.944
+  / 24-64 kbps en az 0.953): bu yuzden hukum degil, 0.95 altinda yalnizca not.
+  Sentetik masterlarin uc kusuru duzeltildi: 13'u uyarisiz olculuyordu (not
+  eklendi), 6'si "gecerli pencere yok" diyordu (artik "ayni zaman cizgisi,
+  ornek ornek oturmuyor: muhtemelen farkli master"), 2'si sabit ton saniliyordu
+  (periyodiklik kaybeden PAL hipotezinden sizmisti; artik yalnizca dogal
+  hipotezde ve guclu zarf capalari dogrulamiyorsa).
+- **Paket ffmpeg icermiyor** (GPL derlemesi ~290 MB acik). Kesif sirasina exe'nin
+  yanindaki `bin\` eklendi; `setup-ffmpeg.ps1` Aniflow'un adres cozumlemesini
+  (API + digest -> sabit latest adresleri -> surum sayfasi) kullanir, kurmadan
+  once aresample/astats ve libsoxr'u denetler. BtbN derleme betiklerinde
+  `50-soxr.sh` var; winget'teki BtbN kopyasi denetimi geciyor.
+- **Duman testi** (`--smoke-test`): pencereli exe'nin konsolu yok, cokerse
+  sessiz kalir. Bayrak pencereyi kurar, surum / ffmpeg / sekme sayisi / rapor
+  sablonu / varsayilan ses cikisinin push modunda acilmasi bilgisini JSON'a
+  yazar. Sablon ve ses denetimi ffmpeg aramasindan ONCE kosar ki ffmpeg'siz CI
+  makinesinde de sonuc versin (cikis kodu 2). `build.ps1` surum, sablon ya da
+  ses hatasinda durur; ffmpeg ve ses cihazi yoksa yalnizca uyarir.
+- **Kurulum kullanici basina**, yonetici yetkisi yok: `%LOCALAPPDATA%\Programs\
+  CodecDelta`, Baslat menusu kisayolu. Kaldirma ayarlari ve tarama onbellegini
+  korur (`-Purge` haric).
+- Paketleme sirasinda bulunan hata: ffmpeg yokken mesaj "klasoru ayarlardan
+  gosterin" diyordu, ama uygulama pencere acilmadan kapandigi icin ayarlara
+  ulasilamiyordu.
+- Kullanicinin kendi dosyalariyla esik kalibrasyonu v1.0'da da YOK: v0.4.0'daki
+  gerekce (dar marj, dogrulanamayan otomatik ayar) gecerli.
+- Boyut: zip 62-67 MB (yerel ve CI yapilari arasinda); en buyuk pay Qt (Qt6 bin 75 MB, icinde QtMultimedia'nin
+  kendi FFmpeg DLL'leri ve opengl32sw). Bunlar ABX ses cikisini bozmadan
+  ayiklanabilir mi DOGRULANMADI, o yuzden dokunulmadi.

@@ -32,19 +32,24 @@ from PyQt6.QtWidgets import (
     QRadioButton,
     QSizePolicy,
     QSpinBox,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
+from app.compare.pipeline import Track, open_track
 from app.core import settings as settings_mod
 from app.core.ffmpeg_locate import FFmpegTools
 from app.core.ffmpeg_runner import CancelToken
 from app.core.settings import Settings
 from app.core.tasks import ffmpeg_slot
-from app.encode import jobs, matrix, naming
+from app.encode import jobs, matrix, naming, sweep
 from app.encode.matrix import CodecSpec, EncodeSettings, Mode
 from app.ui.i18n import localize, tr
+from app.ui.present import db_text
 from app.ui.theme import COLORS
+from app.ui.widgets.charts import SweepChart
 from app.ui.widgets.file_slot import FileSlot
 from app.ui.worker import Runner
 
@@ -75,6 +80,8 @@ class EncodeTab(QWidget):
     encoded = pyqtSignal(object)
     # Ayarlar (orn. cikti klasoru) kaydedildi; diger sekmeler guncellenmeli (D21).
     settings_changed = pyqtSignal(object)
+    # Tarama basamagini ABX ile dogrulama istegi: (sonuc, referans, test).
+    abx_requested = pyqtSignal(object, object, object)
 
     def __init__(
         self, tools: FFmpegTools, settings: Settings, parent: QWidget | None = None
@@ -179,8 +186,14 @@ class EncodeTab(QWidget):
         self.start_button.setObjectName("Primary")
         self.start_button.clicked.connect(self.start)
         self.cancel_button = QPushButton(tr("action.cancel"))
-        self.cancel_button.clicked.connect(self.runner.cancel)
+        self.cancel_button.clicked.connect(self._cancel)
         self.cancel_button.hide()
+        self.sweep_button = QPushButton(tr("sweep.start"))
+        self.sweep_button.setToolTip(tr("sweep.tooltip"))
+        self.sweep_button.clicked.connect(self.start_sweep)
+        self.sweep_runner = Runner(self)
+        self.sweep: sweep.Sweep | None = None
+        self._sweep_reference: Track | None = None
         self.progress = QProgressBar()
         self.progress.setRange(0, 1000)
         self.progress.setTextVisible(False)
@@ -189,6 +202,7 @@ class EncodeTab(QWidget):
         self.stage.setObjectName("Stage")
         actions = QHBoxLayout()
         actions.addWidget(self.start_button)
+        actions.addWidget(self.sweep_button)
         actions.addWidget(self.cancel_button)
         actions.addSpacing(12)
         actions.addWidget(self.stage, 1)
@@ -201,6 +215,7 @@ class EncodeTab(QWidget):
         layout.addWidget(codec_card)
         layout.addWidget(out_card)
         layout.addLayout(actions)
+        layout.addWidget(self._build_sweep_card())
         layout.addStretch()
 
         self.runner.stage.connect(self._on_stage)
@@ -208,6 +223,11 @@ class EncodeTab(QWidget):
         self.runner.failed.connect(self._on_failed)
         self.runner.cancelled.connect(self._on_cancelled)
         self.runner.busy_changed.connect(self._on_busy)
+        self.sweep_runner.stage.connect(self._on_sweep_stage)
+        self.sweep_runner.succeeded.connect(self._on_sweep_done)
+        self.sweep_runner.failed.connect(self._on_failed)
+        self.sweep_runner.cancelled.connect(lambda: self.stage.setText(tr("stage.cancelled")))
+        self.sweep_runner.busy_changed.connect(self._on_busy)
         self._on_codec()
 
     # -- secim durumu -------------------------------------------------------------------
@@ -382,9 +402,111 @@ class EncodeTab(QWidget):
         self.warning.setVisible(bool(messages))
         planned = self.planned_output()
         self.preview.setText(f"→ {planned}" if planned is not None else "")
-        self.start_button.setEnabled(not self.runner.busy and planned is not None and not blocked)
+        busy = self.runner.busy or self.sweep_runner.busy
+        self.start_button.setEnabled(not busy and planned is not None and not blocked)
+        available = self.codec.model().item(self.codec.currentIndex()).isEnabled()
+        self.sweep_button.setEnabled(
+            not busy
+            and self.source.info is not None
+            and available
+            and not blocked
+            and bool(sweep.bitrates_for(self.spec))
+        )
+
+    def _build_sweep_card(self) -> QFrame:
+        self.sweep_card, box = _card(tr("sweep.title"))
+        self.sweep_chart = SweepChart()
+        box.addWidget(self.sweep_chart)
+        self.sweep_table = QTableWidget(0, 3)
+        self.sweep_table.setHorizontalHeaderLabels(
+            [tr("sweep.col.bitrate"), tr("summary.snr"), "NMR p95"]
+        )
+        self.sweep_table.verticalHeader().setVisible(False)
+        self.sweep_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.sweep_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.sweep_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.sweep_table.setMaximumHeight(190)
+        box.addWidget(self.sweep_table)
+        note = QLabel(tr("disclaimer.audibility"))
+        note.setObjectName("Muted")
+        note.setWordWrap(True)
+        box.addWidget(note)
+        self.sweep_abx = QPushButton(tr("action.abx"))
+        self.sweep_abx.clicked.connect(self._sweep_to_abx)
+        box.addWidget(self.sweep_abx, 0, Qt.AlignmentFlag.AlignLeft)
+        self.sweep_card.hide()
+        return self.sweep_card
+
+    # -- bit hizi taramasi -------------------------------------------------------------------
+
+    def start_sweep(self) -> None:
+        info = self.source.info
+        spec = self.spec
+        if info is None or self.runner.busy or self.sweep_runner.busy:
+            return
+        rates = sweep.bitrates_for(spec)
+        if not rates:
+            return
+        reference = Track(path=info.path, info=info, stream_index=self.source.stream_index)
+        tools = self.tools
+        workdir = self.settings.temp_dir() / "sweep"
+
+        def work(token: CancelToken, stage: Callable[[str], None]) -> sweep.Sweep:
+            with ffmpeg_slot():
+                return sweep.run(
+                    tools.ffmpeg, tools.ffprobe, reference, spec, workdir, cancel=token, stage=stage
+                )
+
+        self._sweep_reference = reference
+        self.progress.setValue(0)
+        self.sweep_runner.start(work)
+
+    def _on_sweep_stage(self, key: str) -> None:
+        if key.startswith("rung:"):
+            self.stage.setText(tr("sweep.rung", kbps=key[5:]))
+        else:
+            self.stage.setText(tr(f"stage.{key}"))
+
+    def _on_sweep_done(self, result: object, seconds: float) -> None:
+        assert isinstance(result, sweep.Sweep)
+        self.sweep = result
+        points = result.points
+        self.sweep_chart.show_points(
+            [p.bitrate_kbps for p in points], [p.result.headline_snr_db for p in points]
+        )
+        self.sweep_table.setRowCount(len(points))
+        for row, point in enumerate(points):
+            nmr = point.result.nmr.p95_db if point.result.nmr is not None else float("nan")
+            for column, text in enumerate(
+                (f"{point.bitrate_kbps} kbps", db_text(point.result.headline_snr_db), db_text(nmr))
+            ):
+                self.sweep_table.setItem(row, column, QTableWidgetItem(text))
+        if points:
+            self.sweep_table.selectRow(len(points) // 2)
+        self.sweep_card.show()
+        self.stage.setText(tr("sweep.done", seconds=seconds))
+        self._refresh()
+
+    def _sweep_to_abx(self) -> None:
+        if self.sweep is None or self._sweep_reference is None:
+            return
+        rows = self.sweep_table.selectionModel().selectedRows()
+        row = rows[0].row() if rows else 0
+        point = self.sweep.points[row]
+        if point.result.status != "measured" or not point.path.exists():
+            QMessageBox.warning(self, tr("error.encode"), tr("sweep.no_abx"))
+            return
+        self.abx_requested.emit(
+            point.result, self._sweep_reference, open_track(self.tools.ffprobe, point.path)
+        )
+
+    def _cancel(self) -> None:
+        self.runner.cancel()
+        self.sweep_runner.cancel()
 
     def _on_busy(self, busy: bool) -> None:
+        # Iki is (kodlama, tarama) ayni denetimleri kilitler.
+        busy = busy or self.runner.busy or self.sweep_runner.busy
         self.progress.setVisible(busy)
         self.cancel_button.setVisible(busy)
         # Kodlama surerken TUM ayarlar kilitli: once bit hizi/kalite/gelismis

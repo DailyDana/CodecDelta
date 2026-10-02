@@ -58,6 +58,7 @@ class MainWindow(QMainWindow):
         self.encode = EncodeTab(self.tools, self.settings)
         self.encode.encoded.connect(self._on_encoded)
         self.encode.settings_changed.connect(self._on_settings)
+        self.encode.abx_requested.connect(self._on_abx_requested)
         # Kodlama bittiginde Analiz mesgulse karsilastirma kuyruga alinir (D27).
         self._queued: Encoded | None = None
         self.analyze.runner.busy_changed.connect(self._run_queued)
@@ -123,6 +124,7 @@ class MainWindow(QMainWindow):
             code == self.settings.language
             or self.analyze.runner.busy
             or self.encode.runner.busy
+            or self.encode.sweep_runner.busy
             or self.abx.runner.busy
             or self.batch.runner.busy
             or abx_active
@@ -157,7 +159,13 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent | None) -> None:
         self.abx.player.release()
-        for runner in (self.analyze.runner, self.encode.runner, self.abx.runner, self.batch.runner):
+        for runner in (
+            self.analyze.runner,
+            self.encode.runner,
+            self.encode.sweep_runner,
+            self.abx.runner,
+            self.batch.runner,
+        ):
             if runner.busy:
                 runner.cancel()
                 runner.wait(10000)

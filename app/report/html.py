@@ -76,6 +76,11 @@ def _environment() -> jinja2.Environment:
     )
 
 
+def self_check() -> None:
+    """Sablon bulunup derlenebiliyor mu (paketlenmis yapinin duman testi)."""
+    _environment().get_template("report.html.j2")
+
+
 def _identity(path: Path) -> str:
     try:
         return privacy.content_id(path)

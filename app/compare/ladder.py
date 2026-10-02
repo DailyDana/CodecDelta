@@ -158,6 +158,8 @@ def build(
     rungs: Sequence[int] = DEFAULT_RUNGS,
     resample: ResampleCfg = DEFAULT_RESAMPLE,
     keep_files: bool = False,
+    extension: str | None = None,
+    prefix: str = "ladder",
     cancel: CancelToken | None = None,
     stage: Callable[[str], None] | None = None,
 ) -> tuple[Rung, ...]:
@@ -165,12 +167,12 @@ def build(
 
     `stage`, her basamaga baslarken "rung:<kbps>" anahtariyla cagrilir.
     """
-    extension = _EXTENSION.get(codec, "mka")
+    extension = extension or _EXTENSION.get(codec, "mka")
     out: list[Rung] = []
     for bitrate in rungs:
         if stage is not None:
             stage(f"rung:{bitrate}")
-        path = workdir / f"ladder_{codec}_{bitrate}k.{extension}"
+        path = workdir / f"{prefix}_{codec}_{bitrate}k.{extension}"
         job, _ = prepare(
             EncodeJob(
                 source=reference.path,

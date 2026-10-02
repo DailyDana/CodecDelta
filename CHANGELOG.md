@@ -8,6 +8,48 @@ While the version is `0.x`, the API may break between minor versions.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-02
+
+### Added
+- **Bitrate sweep** (Encode tab): the reference is encoded with one codec at
+  96, 128, 160, 192 and 256 kbps (the ones the codec accepts; otherwise five
+  evenly spaced bitrates) and each encode is compared. The result is an SNR
+  curve and a table with a fixed line that the measured difference is not
+  audibility, and any point can be sent to the ABX tab.
+- **Packaging**: `tools/build.ps1` makes a one-folder Windows build (ffmpeg
+  not bundled), starts it with `--smoke-test` (window, report template, audio
+  output) and zips it; `install.ps1` installs it per user with a Start menu
+  shortcut and uninstalls it; `setup-ffmpeg.ps1` downloads a verified ffmpeg
+  (digest, soxr) into `%LOCALAPPDATA%\CodecDelta\bin`. CI builds and
+  smoke-tests the package on a clean runner.
+- A note when two aligned files correlate below 0.95: they may be different
+  masters, and then the SNR includes mastering differences.
+
+### Changed
+- The match thresholds were calibrated on real pairs from 21 tracks: same
+  recording 210/210 aligned (envelope rho >= 0.995, fine |r| >= 0.990),
+  different recording 63/63 rejected (rho <= 0.420). The different-master
+  class is synthetic (EQ + compression) and cannot be separated from very low
+  bitrate encodes by correlation, hence a note rather than a verdict.
+- Pairs whose anchors agree but whose waveforms do not line up sample by
+  sample are now explained as a probable different master instead of "no
+  analysis window produced a valid alignment".
+
+### Fixed
+- An EQ'd copy could be reported as a steady tone: the periodicity flag
+  leaked from a losing PAL hypothesis.
+- With no ffmpeg found, the message said to set its folder in settings,
+  which cannot be reached before the window opens; it now points to
+  `setup-ffmpeg.ps1` and winget.
+
+### Not verified
+- ABX by ear, and playback over Bluetooth.
+- A full analysis inside the packaged executable (the smoke test covers the
+  window, the report template and opening the audio output).
+- A full `setup-ffmpeg.ps1` download (URL resolution and the capability check
+  were run).
+- Library scan speed on a cold disk or an HDD.
+
 ## [0.4.0] - 2026-10-02
 
 ### Added

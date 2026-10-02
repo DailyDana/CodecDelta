@@ -68,6 +68,11 @@ _GATE_MAX_LAG = 2
 # gecikmesi dosyanin cogunluguna ait degil.
 _GATE_MIN_KEPT = 0.5
 
+# Hizali ciftte ince korelasyon bunun altindaysa "farkli master olabilir" notu.
+# Gercek veri (tools/calibrate_match.py): ayni kayit 210 cift en az 0.990;
+# 24-64 kbps kodlamalar en az 0.953; sentetik farkli master en fazla 0.944.
+MASTER_SUSPECT_CORRELATION = 0.95
+
 # Referansin side gucu mid'inkinin bu katindan (-60 dB) azsa side olculmez.
 _EMPTY_SIDE = 1e-6
 
@@ -405,6 +410,24 @@ def compare(
     alignment = plan.build(ref_env, test_env, read_reference, read_test, rate)
     if alignment.verdict not in ("aligned", "different_master"):
         return _not_measured(reference, test, alignment, rate, status="not_comparable", notes=notes)
+    fine = alignment.fine
+    if (
+        alignment.verdict == "aligned"
+        and fine is not None
+        and abs(fine.correlation) < MASTER_SUSPECT_CORRELATION
+    ):
+        # Hizalandi ama korelasyon dusuk: farkli master olabilir. Kesin degil --
+        # cok dusuk bit hizli kodlama da korelasyonu dusurur (kalibrasyon: 24-64
+        # kbps en az 0.953, sentetik farkli master en fazla 0.944).
+        notes.append(
+            Message(
+                "compare.maybe_master",
+                "the aligned correlation is low ({r:.2f}): the files may be different masters "
+                "(EQ, compression), and then the SNR includes mastering differences, not only "
+                "codec noise",
+                r=abs(fine.correlation),
+            )
+        )
     if alignment.verdict == "different_master":
         notes.append(
             Message(

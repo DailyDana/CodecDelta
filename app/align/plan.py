@@ -420,7 +420,22 @@ def build(
             break
 
     if not points:
-        reasons.append(Message("plan.no_window", "no analysis window produced a valid alignment"))
+        if anchored and drift is not None and drift.anchors >= drift_mod.MIN_ANCHORS:
+            # Capalar ayni zaman cizgisinde birlesiyor ama dalga bicimi ornek
+            # ornek oturmuyor: tipik olarak EQ ya da baska bir isleme fazi
+            # degistirmistir (kalibrasyonda sentetik "farkli master"in 8'i).
+            reasons.append(
+                Message(
+                    "plan.no_fine_alignment",
+                    "the files share a timeline but do not line up sample by sample: probably a "
+                    "different master (EQ or other processing changes the phase), so no codec "
+                    "difference can be measured",
+                )
+            )
+        else:
+            reasons.append(
+                Message("plan.no_window", "no analysis window produced a valid alignment")
+            )
         return result("unaligned")
 
     # Hukum ve kazanc ilk (izlemede: en iyi) noktadan; izleme noktalarindan

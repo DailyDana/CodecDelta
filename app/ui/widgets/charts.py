@@ -155,3 +155,33 @@ class NmrView(pg.PlotWidget):
         self.getPlotItem().getAxis("left").setTicks([ticks])
         self.getPlotItem().setXRange(0, width, padding=0)
         self.getPlotItem().setYRange(0, grid.shape[0], padding=0)
+
+
+class SweepChart(pg.PlotWidget):
+    """Bit hizi taramasi: codec S/N'in bitrate'e gore egrisi."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent=parent)
+        _configure(self, min_height=200)
+        self.setLabel("left", "SNR (dB)")
+        self.setLabel("bottom", "kbps")
+
+    def show_points(self, bitrates: list[int], snr_db: list[float]) -> None:
+        self.clear()
+        finite = [
+            (b, s)
+            for b, s in zip(bitrates, snr_db, strict=True)
+            if s == s and abs(s) != float("inf")
+        ]
+        if not finite:
+            return
+        xs, ys = zip(*finite, strict=True)
+        self.plot(
+            list(xs),
+            list(ys),
+            pen=pg.mkPen(COLORS["accent"], width=2),
+            symbol="o",
+            symbolBrush=COLORS["accent"],
+            symbolPen=None,
+        )
+        self.getPlotItem().getAxis("bottom").setTicks([[(b, str(b)) for b in bitrates]])

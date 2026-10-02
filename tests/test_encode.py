@@ -368,3 +368,61 @@ def test_wma_limits_come_from_measurement(ffmpeg_tools: FFmpegTools) -> None:
     limits = jobs.encoder_limits(ffmpeg_tools.ffmpeg, "wmav2")
     assert limits.max_channels == 2
     assert limits.rates is not None and max(limits.rates) == 48000
+
+
+# -- bit hizi taramasi -------------------------------------------------------------
+
+
+def test_sweep_ladder_follows_what_the_codec_offers() -> None:
+    from app.encode import sweep
+
+    assert sweep.bitrates_for(matrix.by_key("opus")) == (96, 128, 160, 192, 256)
+    ac3 = sweep.bitrates_for(matrix.by_key("ac3"))
+    assert len(ac3) == 5 and set(ac3) <= set(matrix.by_key("ac3").bitrates)
+    assert sweep.bitrates_for(matrix.by_key("flac")) == ()
+
+
+@pytest.mark.needs_ffmpeg
+def test_sweep_measures_each_rung_and_keeps_the_files(
+    ffmpeg_tools: FFmpegTools, tmp_path: Path
+) -> None:
+    from app.compare.pipeline import open_track
+    from app.encode import sweep
+
+    source = tmp_path / "src.flac"
+    subprocess.run(
+        [
+            str(ffmpeg_tools.ffmpeg),
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "anoisesrc=color=pink:sample_rate=48000:duration=12:seed=3,tremolo=f=1.1:d=0.85",
+            "-ac",
+            "2",
+            "-c:a",
+            "flac",
+            str(source),
+        ],
+        check=True,
+    )
+    reference = open_track(ffmpeg_tools.ffprobe, source)
+    stages: list[str] = []
+    result = sweep.run(
+        ffmpeg_tools.ffmpeg,
+        ffmpeg_tools.ffprobe,
+        reference,
+        matrix.by_key("opus"),
+        tmp_path / "work",
+        bitrates=(96, 128, 192),
+        stage=stages.append,
+    )
+    assert [p.bitrate_kbps for p in result.points] == [96, 128, 192]
+    assert stages == ["rung:96", "rung:128", "rung:192"]
+    snr = [p.result.headline_snr_db for p in result.points]
+    assert snr[0] < snr[1] < snr[2]
+    assert all(p.path.exists() for p in result.points)
+    assert sweep.track_of(ffmpeg_tools.ffprobe, result.points[0]).path == result.points[0].path
+    combined = result.as_set()
+    assert combined.sweep_axis == "bitrate" and len(combined.items) == 3

@@ -636,3 +636,40 @@ def test_an_inverted_copy_is_measured(
     result = _run(ffmpeg_tools, files["ref"], test)
     assert result.status == "measured", result.notes
     assert result.polarity == -1 and result.excluded_s == 0.0
+
+
+@pytest.mark.needs_ffmpeg
+def test_a_different_master_is_flagged_not_called_a_steady_tone(
+    ffmpeg_tools: FFmpegTools, edited: dict[str, Path], tmp_path: Path
+) -> None:
+    """EQ + sikistirma uygulanmis kopya: "sabit ton" degil, farkli master.
+
+    Kalibrasyonda (tools/calibrate_match.py) boyle iki cift periyodik sayiliyordu
+    (PAL hipotezinin bayragi sizdi); hizalananlar da uyarisiz olculuyordu.
+    """
+    from tools.calibrate_match import MASTER_FILTER
+
+    master = tmp_path / "master.flac"
+    subprocess.run(
+        [
+            str(ffmpeg_tools.ffmpeg),
+            "-y",
+            "-v",
+            "error",
+            "-i",
+            str(edited["ref"]),
+            "-af",
+            MASTER_FILTER,
+            "-c:a",
+            "flac",
+            str(master),
+        ],
+        check=True,
+    )
+    result = _run(ffmpeg_tools, edited["ref"], master)
+    keys = {getattr(x, "key", "") for x in (*result.plan.reasons, *result.notes)}
+    assert "plan.periodic" not in keys
+    if result.plan.verdict == "aligned":
+        assert "compare.maybe_master" in keys
+    else:
+        assert "plan.no_fine_alignment" in keys
