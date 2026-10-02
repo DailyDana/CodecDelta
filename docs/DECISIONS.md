@@ -900,3 +900,29 @@ Bulgular ve durumlari: `docs/AUDIT-2026-09.md`.
   Fazla kanal is baslamadan anlasilir bir iletiyle durduruluyor (otomatik
   downmix yok); Opus'ta 5.1(side) yalnizca 5.1 olarak yeniden etiketleniyor.
   Panel bunlari baslatmadan once gosteriyor, merdiven de ayni adimdan geciyor.
+
+## ABX (v0.3.0)
+
+- **Kesit karsilastirmanin kendisinden.** B, karsilastirmanin gecikme modeliyle
+  (kesirli gecikme ve saat kaymasi dahil) A'nin zaman ekseninde `warp.sample`
+  ile orneklenir; olculen kazanc ve polarite kaldirilir; iki taraf AYNI
+  olcekle tepe guvenligine alinir. 370 ms gecikmeli, -2 dB, ters polariteli
+  kayipsiz kopya referansla -60 dB'nin altinda ortusuyor (44.1 ve 48 kHz).
+- **Oynatma hizi cihazin hizi.** Iki dosya da ayni soxr ayariyla o hiza
+  okunuyor; ayni islemden gectikleri icin bu bir ipucu degil. QAudioSink
+  float32, pull modu, 1024 cerceve tampon (planda push modu olculmustu; pull
+  modu ayni tampon boyuyla daha basit ve testli).
+- **Capraz gecis dogrusal ve 8 ms**, her kaynagin kazanci hedefine rampayla
+  gider: yarida kesilen gecis sicramaz, A -> A ayni makineden gecer. Dongu
+  noktasinda kuyruk basla ayni gecisle birlesir. Testte en kotu durum (A = sinus,
+  B = ters sinus) ornek-arasi degisimi sinusun kendi egiminin 1.5 katinin
+  altinda tutuyor.
+- **Her yanittan sonra calma durur.** Aksi halde yeni X, eski X'in calmaya devam
+  etmesiyle (ya da ani bir degisimle) ele verilebilirdi.
+- **Kritik kesit NMR haritasindan:** sutunlarin en kotu bandi pencere boyunca
+  ortalanir. Duzenlenmis dosyada (hizasiz bloklar olcume girmedi) sutun zamani
+  kayabilir; secim yine gecerli aralikta kalir.
+- Yuzdeler mesajlara 0-100 sayi olarak veriliyor: Turkcede "%" once gelir,
+  Python'un `:.0%` bicimi onu hep sona koyuyordu.
+- Bulunan yan hata: D1'in blok kapisi PHAT tepesini isaretli ariyordu; ters
+  polariteli kayipsiz kopya olculmuyordu. Tepe artik mutlak degerle aranir.

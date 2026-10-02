@@ -8,6 +8,33 @@ While the version is `0.x`, the API may break between minor versions.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-02
+
+### Added
+- **ABX blind test** (new tab; "Verify with ABX →" in the Analyze results).
+  The excerpt is prepared from the comparison, never played from the original
+  files: B is sampled on A's timeline through the measured delay (fractional
+  delay and clock drift included) and its gain and polarity are matched, so
+  neither a time shift nor a level difference gives the answer away.
+- Every switch, including A to A, goes through the same 8 ms linear
+  crossfade; switching keeps the playback position; the excerpt loops without
+  a click; playback stops after each answer.
+- Three modes that never mix: a fixed number of trials (stopping early gives
+  no p-value), a sequential test that stops at a decision (Wald SPRT, no
+  p-value), and practice (answers shown, nothing logged).
+- Before starting, the tab says how many correct answers are needed and how
+  strong the test is. The result never says "no difference": a failed test
+  reads "not shown", gives the power and the upper bound, and is marked
+  inconclusive when the confidence interval includes 50 %. Answers given
+  without listening are flagged; a critical (worst-passage) or hand-picked
+  excerpt is marked as not representative; trying several excerpts of one
+  pair tightens alpha (Sidak). The session log (JSON, file names only) can be
+  saved.
+
+### Fixed
+- The block gate added for audit D1 looked for a signed peak, so a lossless
+  copy with inverted polarity was not measured.
+
 ## [0.2.1] - 2026-10-02
 
 Fixes from the September 2026 audit (`docs/AUDIT-2026-09.md`: 46 findings,
