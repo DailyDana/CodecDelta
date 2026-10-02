@@ -26,7 +26,7 @@ ilk bakis; dagilimlar `tools/calibrate_transcode.py` ile cikarilir):
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -87,6 +87,8 @@ class SpectralEvidence:
     # ve dususu; diz ve taban bu durumda duvarin ALTINDA aranir. Yoksa NaN.
     antialias_hz: float = math.nan
     antialias_drop_db: float = math.nan
+    # Sifira cevrilen sonlu olmayan (NaN/inf) ornek sayisi.
+    nonfinite_samples: int = 0
 
     @property
     def nyquist_hz(self) -> float:
@@ -327,4 +329,6 @@ def analyse(
                 accumulator.push((pcm[:, 0] + pcm[:, 1]) * 0.5, (pcm[:, 0] - pcm[:, 1]) * 0.5)
             else:
                 accumulator.push(pcm[:, 0], None)
-    return accumulator.finish()
+        nonfinite = stream.nonfinite
+    evidence = accumulator.finish()
+    return replace(evidence, nonfinite_samples=nonfinite) if nonfinite else evidence

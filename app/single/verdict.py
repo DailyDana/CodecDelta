@@ -420,6 +420,15 @@ def verify(
         )
         evidence = analyse(rejudge)
     reasons, counter, notes = judge_spectral(evidence)
+    if evidence.nonfinite_samples:
+        notes.append(
+            Message(
+                "single.nonfinite",
+                "{count} samples were not finite numbers (NaN or infinity) and were treated as "
+                "silence",
+                count=evidence.nonfinite_samples,
+            )
+        )
     notes = span_notes + rate_notes + notes
     flac_info = flac_bitstream.scan(info.path) if stream.codec == "flac" else None
     notes += judge_container(info, flac_info)

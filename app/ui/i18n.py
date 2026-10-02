@@ -331,6 +331,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "msg.probe.no_audio": "{name} hiç ses izi içermiyor.",
         "msg.plan.silent": "{which} dosya sessiz: hizalanacak bir şey yok",
         "msg.plan.partial_overlap": "dosyalar yalnızca {seconds:.0f} s örtüşüyor (kısa olanın %{percent:.0f}'i): güvenilir hizalama için çok az",
+        "msg.stream.partial_frame": "kod çözücünün çıktısı bir örnek çerçevesinin ortasında bitti",
+        "msg.single.nonfinite": "{count} örnek sonlu bir sayı değildi (NaN ya da sonsuz) ve sessizlik sayıldı",
         "msg.compare.no_side": "referansta side (sol eksi sağ) içeriği yok, dual mono'daki gibi: side ölçülmedi",
         "msg.compare.multichannel": "{channels} kanal: mid tüm kanalların ortalaması, side ön sol eksi ön sağ",
         "msg.compare.excluded": "{total:.1f} s'nin {excluded:.1f} s'si referansla hizalanmadı (bir düzenleme, kesim ya da farklı kapanış) ve ölçümün dışında bırakıldı",
