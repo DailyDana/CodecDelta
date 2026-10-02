@@ -26,6 +26,7 @@ ilk bakis; dagilimlar `tools/calibrate_transcode.py` ile cikarilir):
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -119,8 +120,8 @@ class _Accumulator:
     def __init__(self, sample_rate: int, *, top_hz: float | None, stereo: bool) -> None:
         self.sample_rate = sample_rate
         self.top_hz = top_hz
-        self._mid_stft = StreamingStft(FFT_SIZE)
-        self._side_stft = StreamingStft(FFT_SIZE) if stereo else None
+        self._stereo = stereo
+        self.restart()
         self._scale = 4.0 / (FFT_SIZE * float(np.sum(hann(FFT_SIZE) ** 2)))
         self.freqs = np.fft.rfftfreq(FFT_SIZE, 1.0 / sample_rate)
         self._ref_band = (self.freqs >= _REF_LO_HZ) & (self.freqs < _REF_HI_HZ)
@@ -135,6 +136,15 @@ class _Accumulator:
         self._side_sum = np.zeros(self.freqs.size) if stereo else None
         self._active = 0
         self._cutoffs: list[np.ndarray] = []
+
+    def restart(self) -> None:
+        """Yeni bir kesit basliyor: STFT durumu sifirlanir, birikenler kalir.
+
+        Aksi halde iki kesitin sinirinda ikisinden birden olusan yapay bir
+        cerceve dogardi.
+        """
+        self._mid_stft = StreamingStft(FFT_SIZE)
+        self._side_stft = StreamingStft(FFT_SIZE) if self._stereo else None
 
     def push(self, mid: np.ndarray, side: np.ndarray | None) -> None:
         spectra = self._mid_stft.push(mid.astype(np.float64))
@@ -300,9 +310,13 @@ def analyse(
     start: float | None = None,
     duration: float | None = None,
     rate: int | None = None,
+    extra: Sequence[tuple[float, float]] = (),
     cancel: CancelToken | None = None,
 ) -> SpectralEvidence:
     """Dosyanin bir kesitini cozup kanit cikarir; bellek kesit boyundan bagimsiz.
+
+    `extra`: ayni kanita eklenecek ek (baslangic, sure) kesitleri. Toplu tarama
+    belirsiz bir dosyada iki kesit daha ekleyip kanit tabanini genisletir.
 
     Varsayilan native hiz: resampler'in kendi kesimi olcumu kirletir. `rate`
     yalnizca icerigin zaten o hizin Nyquist'inin altinda bittigi bilinen
@@ -312,23 +326,27 @@ def analyse(
         sample_rate = rate
     top_hz = _RESAMPLED_TOP_FRACTION * sample_rate / 2.0 if rate is not None else None
     accumulator = _Accumulator(sample_rate, top_hz=top_hz, stereo=channels >= 2)
-    with open_pcm(
-        ffmpeg,
-        path,
-        sample_rate=sample_rate,
-        channels=channels,
-        stream_index=stream_index,
-        rate=rate,
-        start=start,
-        duration=duration,
-        cancel=cancel,
-    ) as stream:
-        for block in stream.blocks(1 << 16):
-            pcm = block.astype(np.float64)
-            if pcm.shape[1] >= 2:
-                accumulator.push((pcm[:, 0] + pcm[:, 1]) * 0.5, (pcm[:, 0] - pcm[:, 1]) * 0.5)
-            else:
-                accumulator.push(pcm[:, 0], None)
-        nonfinite = stream.nonfinite
+    nonfinite = 0
+    segments: list[tuple[float | None, float | None]] = [(start, duration), *extra]
+    for segment_start, segment_duration in segments:
+        accumulator.restart()
+        with open_pcm(
+            ffmpeg,
+            path,
+            sample_rate=sample_rate,
+            channels=channels,
+            stream_index=stream_index,
+            rate=rate,
+            start=segment_start,
+            duration=segment_duration,
+            cancel=cancel,
+        ) as stream:
+            for block in stream.blocks(1 << 16):
+                pcm = block.astype(np.float64)
+                if pcm.shape[1] >= 2:
+                    accumulator.push((pcm[:, 0] + pcm[:, 1]) * 0.5, (pcm[:, 0] - pcm[:, 1]) * 0.5)
+                else:
+                    accumulator.push(pcm[:, 0], None)
+            nonfinite += stream.nonfinite
     evidence = accumulator.finish()
     return replace(evidence, nonfinite_samples=nonfinite) if nonfinite else evidence

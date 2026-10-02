@@ -40,6 +40,7 @@ from app.core import settings as settings_mod
 from app.core.ffmpeg_locate import FFmpegTools
 from app.core.ffmpeg_runner import CancelToken
 from app.core.settings import Settings
+from app.core.tasks import ffmpeg_slot
 from app.encode import jobs, matrix, naming
 from app.encode.matrix import CodecSpec, EncodeSettings, Mode
 from app.ui.i18n import localize, tr
@@ -438,13 +439,16 @@ class EncodeTab(QWidget):
         ffmpeg = self.tools.ffmpeg
 
         def work(token: CancelToken, stage: Callable[[str], None]) -> Path:
-            return jobs.run_with_progress(
-                ffmpeg,
-                job,
-                duration=duration,
-                on_progress=lambda f: stage(f"{_PROGRESS_PREFIX}{f:.4f}"),
-                cancel=token,
-            )
+            # Toplu taramayla ayni ffmpeg semaforu: ikisi birlikte calisirsa
+            # surec sayisi sinirli kalir.
+            with ffmpeg_slot():
+                return jobs.run_with_progress(
+                    ffmpeg,
+                    job,
+                    duration=duration,
+                    on_progress=lambda f: stage(f"{_PROGRESS_PREFIX}{f:.4f}"),
+                    cancel=token,
+                )
 
         self.progress.setValue(0)
         self.stage.setText(tr("stage.encode_pct", pct=0.0))

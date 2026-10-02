@@ -20,6 +20,7 @@ nasil birlestigidir.
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -351,9 +352,15 @@ def verify(
     *,
     stream_index: int = 0,
     excerpt_s: float = DEFAULT_EXCERPT_S,
+    extra_at: Sequence[float] = (),
     cancel: CancelToken | None = None,
 ) -> Verdict:
-    """Tek dosyayi dogrular. Dosya kayipli formattaysa `not_applicable`."""
+    """Tek dosyayi dogrular. Dosya kayipli formattaysa `not_applicable`.
+
+    `extra_at`: ana kesite eklenecek kesitlerin konumlari (dosya suresinin
+    kesri, orn. 0.15 ve 0.80). Kanit hepsinin toplamindan cikar; toplu tarama
+    belirsiz dosyada kullanir. Suresi bilinmeyen ya da kisa dosyada yok sayilir.
+    """
     stream = info.stream(stream_index)
     if not stream.is_lossless:
         note = Message(
@@ -384,6 +391,12 @@ def verify(
         starts = [lo + f * (hi - lo) for f in _EXCERPT_FRACTIONS]
         duration = excerpt_s
 
+    extra_segments: list[tuple[float, float]] = []
+    if extra_at and info.duration is not None and duration is not None:
+        lo = _SKIP_EDGE_FRACTION * info.duration
+        hi = info.duration - lo - excerpt_s
+        extra_segments = [(min(max(f * info.duration, lo), hi), excerpt_s) for f in extra_at]
+
     def analyse(rate: int | None = None) -> SpectralEvidence:
         return spectral.analyse(
             ffmpeg,
@@ -394,6 +407,7 @@ def verify(
             start=start,
             duration=duration,
             rate=rate,
+            extra=extra_segments,
             cancel=cancel,
         )
 
@@ -447,6 +461,15 @@ def verify(
                 "{count} samples were not finite numbers (NaN or infinity) and were treated as "
                 "silence",
                 count=evidence.nonfinite_samples,
+            )
+        )
+    if extra_segments:
+        span_notes.append(
+            Message(
+                "single.combined",
+                "judged on {count} excerpts of {seconds:.0f} s",
+                count=1 + len(extra_segments),
+                seconds=excerpt_s,
             )
         )
     notes = span_notes + rate_notes + notes
