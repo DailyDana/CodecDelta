@@ -91,3 +91,12 @@ def test_smoke_test_flag(tmp_path: Path) -> None:
         assert data["error"]
     if data["audio"] is not None:
         assert data["audio"]["opened"] is True
+
+
+def test_pyproject_version_matches() -> None:
+    """pyproject.toml ile app.__version__ ayni kalmali (0.4.0'da 0.2.0'da kalmisti)."""
+    import tomllib
+
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    assert data["project"]["version"] == app.__version__
