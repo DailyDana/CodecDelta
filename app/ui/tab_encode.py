@@ -317,13 +317,48 @@ class EncodeTab(QWidget):
         if folder:
             self.folder.setText(folder)
 
+    def _draft(self, output: Path) -> tuple[jobs.EncodeJob, tuple[str, ...]]:
+        """Kodlama isi, kodlayicinin sinirlarina gore hazirlanmis.
+
+        Kodlayici kaynagi kodlayamiyorsa `EncodeUnsupportedError` (D14).
+        """
+        info = self.source.info
+        assert info is not None
+        choice = self.choice()
+        spec = choice.spec
+        index = self.source.stream_index
+        stream = info.stream(index)
+        job = jobs.EncodeJob(
+            source=info.path,
+            output=output,
+            codec=spec.encoder,
+            bitrate_kbps=choice.bitrate_kbps,
+            stream_index=index,
+            source_rate=stream.sample_rate,
+            extra=matrix.extra_args(choice),
+        )
+        return jobs.prepare(
+            job,
+            jobs.encoder_limits(self.tools.ffmpeg, spec.encoder),
+            channels=stream.channels,
+            channel_layout=stream.channel_layout,
+        )
+
     def _refresh(self) -> None:
-        warnings = matrix.warnings(self.choice())
-        self.warning.setText("\n".join(localize(w) for w in warnings))
-        self.warning.setVisible(bool(warnings))
+        messages = [localize(w) for w in matrix.warnings(self.choice())]
+        blocked = False
+        if self.source.info is not None:
+            try:
+                _, notes = self._draft(Path("draft"))
+                messages += [localize(n) for n in notes]
+            except jobs.EncodeUnsupportedError as exc:
+                messages.append(localize(exc.args[0]))
+                blocked = True
+        self.warning.setText("\n".join(messages))
+        self.warning.setVisible(bool(messages))
         planned = self.planned_output()
         self.preview.setText(f"→ {planned}" if planned is not None else "")
-        self.start_button.setEnabled(not self.runner.busy and planned is not None)
+        self.start_button.setEnabled(not self.runner.busy and planned is not None and not blocked)
 
     def _on_busy(self, busy: bool) -> None:
         self.progress.setVisible(busy)
@@ -355,16 +390,12 @@ class EncodeTab(QWidget):
             suffix=self.settings.output_suffix,
             taken=self._taken,
         )
+        try:
+            job, _ = self._draft(output)
+        except jobs.EncodeUnsupportedError as exc:
+            QMessageBox.critical(self, tr("error.encode"), localize(exc.args[0]))
+            return
         self._remember_folder()
-        job = jobs.EncodeJob(
-            source=info.path,
-            output=output,
-            codec=spec.encoder,
-            bitrate_kbps=choice.bitrate_kbps,
-            stream_index=stream_index,
-            source_rate=info.stream(stream_index).sample_rate,
-            extra=matrix.extra_args(choice),
-        )
         duration = info.stream(stream_index).duration or info.duration
         self._pending = Encoded(info.path, stream_index, output, self.compare_after.isChecked())
         ffmpeg = self.tools.ffmpeg

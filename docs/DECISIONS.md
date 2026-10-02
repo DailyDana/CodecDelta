@@ -890,3 +890,13 @@ Bulgular ve durumlari: `docs/AUDIT-2026-09.md`.
   ve 32/48 kbps MP3'un 4-8 kHz duvari gorulmuyordu. 5 gercek parcanin
   32/48/64 kbps MP3'u: once 15'te 10 "kayipli", simdi 15'te 15. 231 dosyanin
   hukmu degismedi.
+- **D14, D15 -- kodlayici sinirlari isten once.** Hizlar ve kanal duzenleri
+  `ffmpeg -h encoder=X` ciktisindan okunuyor; bildirilmeyenler olculdu (wmav2:
+  48 kHz ve 2 kanal; libvorbis bit hizi modu 88.2/96 kHz'te kurulamiyor, kalite
+  modu 192 kHz'e kadar calisiyor; libopus "(side)" duzenlerini reddediyor).
+  Desteklenmeyen hiz kodlamadan once ACIKCA soxr ile cevriliyor (once kaynagin
+  ustundeki en kucuk kabul edilen hiz, yoksa en buyuk) ve not ediliyor: ffmpeg
+  varsayilan resampler'i 96 kHz MP3/AC-3/MP2'yi sessizce 48'e indiriyordu.
+  Fazla kanal is baslamadan anlasilir bir iletiyle durduruluyor (otomatik
+  downmix yok); Opus'ta 5.1(side) yalnizca 5.1 olarak yeniden etiketleniyor.
+  Panel bunlari baslatmadan once gosteriyor, merdiven de ayni adimdan geciyor.

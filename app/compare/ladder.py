@@ -32,7 +32,7 @@ from app.compare.result import ComparisonResult
 from app.core.ffmpeg_runner import CancelToken
 from app.core.ffmpeg_stream import DEFAULT_RESAMPLE, ResampleCfg
 from app.core.messages import Message
-from app.encode.jobs import EncodeJob
+from app.encode.jobs import EncodeJob, encoder_limits, prepare
 from app.encode.jobs import run as run_encode
 
 # Varsayilan basamaklar (kbps). Opus icin tipik "duyulur / sinirda / seffaf" araligi.
@@ -171,8 +171,7 @@ def build(
         if stage is not None:
             stage(f"rung:{bitrate}")
         path = workdir / f"ladder_{codec}_{bitrate}k.{extension}"
-        run_encode(
-            ffmpeg,
+        job, _ = prepare(
             EncodeJob(
                 source=reference.path,
                 output=path,
@@ -181,9 +180,11 @@ def build(
                 stream_index=reference.stream_index,
                 source_rate=reference.stream.sample_rate,
             ),
-            resample=resample,
-            cancel=cancel,
+            encoder_limits(ffmpeg, codec),
+            channels=reference.stream.channels,
+            channel_layout=reference.stream.channel_layout,
         )
+        run_encode(ffmpeg, job, resample=resample, cancel=cancel)
         try:
             result = compare(
                 ffmpeg, reference, open_track(ffprobe, path), resample=resample, cancel=cancel
