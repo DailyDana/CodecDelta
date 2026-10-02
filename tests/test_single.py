@@ -498,3 +498,15 @@ def test_a_low_bitrate_mp3_wall_below_8_khz_is_found(
     result = verdict.verify(ffmpeg_tools.ffmpeg, probe(ffmpeg_tools.ffprobe, transcode))
     assert result.bucket == "consistent_lossy", result
     assert result.spectral is not None and result.spectral.knee_hz < 8000
+
+
+def test_a_codec_range_wall_blocks_a_lossless_verdict() -> None:
+    """Kesim Nyquist'e uzansa da 20.75 kHz alti dik duvar "kayipsiz" dedirtmemeli (D36)."""
+    evidence = _evidence(cutoff_median_hz=21_200.0, knee_hz=20_200.0, knee_drop_db=35.0)
+    reasons, counter, notes = verdict.judge_spectral(evidence)
+    assert any("brickwall" in r for r in reasons)
+    assert verdict.combine(reasons, counter, notes) != "consistent_lossless"
+    # Nyquist'e yakin duvar (anti-alias) yine yalnizca not
+    near = _evidence(cutoff_median_hz=21_200.0, knee_hz=21_500.0, knee_drop_db=35.0)
+    reasons, counter, notes = verdict.judge_spectral(near)
+    assert verdict.combine(reasons, counter, notes) == "consistent_lossless"

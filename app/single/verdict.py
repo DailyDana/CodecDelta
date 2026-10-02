@@ -116,7 +116,24 @@ def judge_spectral(evidence: SpectralEvidence) -> tuple[list[str], list[str], li
                 khz=cutoff / 1000,
             )
         )
-        if wall or antialias:
+        codec_range_wall = (
+            wall and not wall_near_nyquist and knee_hz < thresholds.MAX_LOSSY_CUTOFF_HZ
+        )
+        if codec_range_wall:
+            # Kare basina kesim Nyquist'e uzansa da uzun donem spektrumda codec
+            # araliginda (< 20.75 kHz) dik bir duvar var: dusuk bit hizli Opus
+            # bir parcada "kayipsiz" cikiyordu (denetim D36). Duvar kanit
+            # sayilir; tam bant karsi-kanitiyla birlikte hukum "belirsiz" olur.
+            reasons.append(
+                Message(
+                    "single.brickwall",
+                    "brickwall at {khz:.1f} kHz: {drop:.0f} dB drop within 500 Hz "
+                    "(natural roll-off measured at 4-10 dB)",
+                    khz=knee_hz / 1000,
+                    drop=drop,
+                )
+            )
+        elif wall or antialias:
             notes.append(
                 Message(
                     "single.antialias_note",
