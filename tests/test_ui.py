@@ -476,3 +476,104 @@ def test_encode_then_compare_runs_through_the_window(ffmpeg_tools, tmp_path: Pat
     # Ikinci kodlama ayni adi ezmez
     assert enc.planned_output() == tmp_path / "out" / "src_enc_opus64k_2.opus"
     window.close()
+
+
+@pytest.mark.needs_ffmpeg
+def test_switching_language_keeps_the_work(ffmpeg_tools, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    """Dil degisince sonuc, iz secimi ve kodlama ayarlari kayboluyordu (D18).
+
+    Meskulken reddedilen degisimde menu yanlis dili isaretli birakiyordu (D20).
+    """
+    app = _qt_app()
+    from app.core.settings import Settings
+    from app.encode.matrix import EncodeSettings
+    from app.ui.main_window import MainWindow
+
+    ff = str(ffmpeg_tools.ffmpeg)
+    reference = tmp_path / "two.mka"
+    noise = "anoisesrc=color=pink:sample_rate=44100:duration=8:seed={s},tremolo=f=1.1:d=0.85"
+    subprocess.run(
+        [
+            ff,
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            noise.format(s=1),
+            "-f",
+            "lavfi",
+            "-i",
+            noise.format(s=2),
+            "-map",
+            "0",
+            "-map",
+            "1",
+            "-ac",
+            "2",
+            "-c:a",
+            "flac",
+            str(reference),
+        ],
+        check=True,
+    )
+    test = tmp_path / "second.opus"
+    subprocess.run(
+        [
+            ff,
+            "-v",
+            "error",
+            "-i",
+            str(reference),
+            "-map",
+            "0:a:1",
+            "-c:a",
+            "libopus",
+            "-b:a",
+            "96k",
+            str(test),
+        ],
+        check=True,
+    )
+    window = MainWindow(ffmpeg_tools, Settings(language="en"))
+    tab = window.analyze
+    tab.load(reference, test)
+    tab.reference.select_stream(1)
+    tab.start_compare()
+    deadline = time.time() + 120
+    while (tab.runner.busy or tab.last_result is None) and time.time() < deadline:
+        app.processEvents()
+        time.sleep(0.02)
+    result = tab.last_result
+    assert result is not None and result.status == "measured"
+
+    window.encode.source.set_path(reference)
+    window.encode.source.select_stream(1)
+    choice = EncodeSettings(codec="mp3", mode="quality", quality=2)
+    window.encode.apply_choice(choice)
+    window.encode.folder.setText(str(tmp_path))
+
+    window.set_language("tr")
+    tab = window.analyze
+    assert tab.reference.stream_index == 1
+    assert tab.last_result is result and tab.results.table.rowCount() == len(result.bands)
+    assert tab.results.ladder_button.isEnabled()
+    assert window.encode.source.stream_index == 1
+    kept = window.encode.choice()
+    assert (kept.codec, kept.mode, kept.quality) == ("mp3", "quality", 2)
+    assert window.encode.folder.text() == str(tmp_path)
+
+    # Mesgulken dil degisimi reddedilir; menu gecerli dili gostermeli.
+    def busy(token, stage):  # type: ignore[no-untyped-def]
+        while not token.cancelled:
+            time.sleep(0.01)
+
+    tab.runner.start(busy)
+    window._language_actions["en"].trigger()
+    assert window.settings.language == "tr"
+    assert window._language_actions["tr"].isChecked()
+    tab.runner.cancel()
+    tab.runner.wait(5000)
+    for _ in range(10):
+        app.processEvents()
+    window.close()

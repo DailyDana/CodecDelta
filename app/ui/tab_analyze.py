@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextlib
 import html
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from PyQt6.QtCore import Qt
@@ -239,6 +240,20 @@ class ResultsPanel(QWidget):
         self._notes(tr("section.reasons"), items)
 
 
+@dataclass(frozen=True)
+class AnalyzeState:
+    """Analiz sekmesinin dil degisiminde tasinan durumu."""
+
+    reference: Path | None
+    reference_stream: int
+    test: Path | None
+    test_stream: int
+    result: ComparisonResult | None
+    tracks: tuple[Track, Track] | None
+    verdict: tuple[Verdict, Track] | None
+    ladder_verdict: ladder.LadderVerdict | None
+
+
 class AnalyzeTab(QWidget):
     def __init__(
         self, tools: FFmpegTools, settings: Settings, parent: QWidget | None = None
@@ -453,6 +468,10 @@ class AnalyzeTab(QWidget):
 
     def _on_ladder(self, verdict: object, seconds: float) -> None:
         assert isinstance(verdict, ladder.LadderVerdict)
+        self._show_ladder(verdict)
+        self._done(seconds)
+
+    def _show_ladder(self, verdict: ladder.LadderVerdict) -> None:
         self.last_ladder = verdict
         steps = "  ·  ".join(
             f"{r.bitrate_kbps}k {present.db_text(r.snr_db)}" for r in verdict.rungs
@@ -463,7 +482,6 @@ class AnalyzeTab(QWidget):
         text = f"<b>{headline}</b><br><span style='color:{muted}'>{caption}</span>"
         self.results.ladder_label.setTextFormat(Qt.TextFormat.RichText)
         self.results.ladder_label.setText(text)
-        self._done(seconds)
 
     def report_html(self) -> tuple[str, Path] | None:
         """Son sonucun raporu ve onerilen dosya adi; sonuc yoksa None."""
@@ -502,6 +520,42 @@ class AnalyzeTab(QWidget):
             QMessageBox.critical(self, tr("error.report"), localize(message))
             return
         self.stage.setText(tr("report.saved", name=written.name))
+
+    def state(self) -> AnalyzeState:
+        """Dil degisiminde arayuz yeniden kurulurken tasinacak durum."""
+        return AnalyzeState(
+            reference=self.reference.path,
+            reference_stream=self.reference.stream_index,
+            test=self.test.path,
+            test_stream=self.test.stream_index,
+            result=self.last_result,
+            tracks=self._last_tracks,
+            verdict=self.last_verdict,
+            ladder_verdict=self.last_ladder,
+        )
+
+    def restore(self, state: AnalyzeState) -> None:
+        """`state`i geri yukler: dosyalar, iz secimi, sonuclar (denetim D18).
+
+        Once yalnizca dosya yollari tasiniyordu; sonuc kayboluyor ve cok izli
+        dosyada iz secimi sessizce varsayilana donuyordu.
+        """
+        self.load(state.reference, state.test)
+        if state.reference is not None:
+            self.reference.select_stream(state.reference_stream)
+        if state.test is not None:
+            self.test.select_stream(state.test_stream)
+        self._last_tracks = state.tracks
+        if state.result is not None:
+            self.last_result = state.result
+            self.results.show_comparison(state.result)
+        elif state.verdict is not None:
+            self.last_verdict = state.verdict
+            self._verify_track = state.verdict[1]
+            self.results.show_verdict(state.verdict[0])
+        if state.ladder_verdict is not None and state.result is not None:
+            self._show_ladder(state.ladder_verdict)
+        self._update_buttons()
 
     def load(self, reference: Path | None, test: Path | None) -> None:
         """Komut satirindan ya da testten dosya yuklemek icin."""

@@ -233,6 +233,27 @@ class EncodeTab(QWidget):
             options={key: box.currentData() for key, box in self._option_boxes.items()},
         )
 
+    def apply_choice(self, choice: EncodeSettings) -> None:
+        """Bir secimi geri yukler (dil degisiminde arayuz yeniden kurulurken, D18)."""
+        position = self.codec.findData(choice.codec)
+        if position >= 0:
+            self.codec.setCurrentIndex(position)
+        if choice.mode == "quality":
+            self.mode_quality.setChecked(True)
+        else:
+            self.mode_bitrate.setChecked(True)
+        if choice.bitrate_kbps is not None:
+            position = self.bitrate.findData(choice.bitrate_kbps)
+            if position >= 0:
+                self.bitrate.setCurrentIndex(position)
+        if choice.quality is not None:
+            self.quality.setValue(choice.quality)
+        for key, value in choice.options.items():
+            box = self._option_boxes.get(key)
+            if box is not None and (position := box.findData(value)) >= 0:
+                box.setCurrentIndex(position)
+        self._refresh()
+
     def output_folder(self) -> Path | None:
         text = self.folder.text().strip()
         return Path(text) if text else None

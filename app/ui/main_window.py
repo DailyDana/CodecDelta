@@ -29,6 +29,7 @@ class MainWindow(QMainWindow):
 
         language_menu = self.menuBar().addMenu("Language / Dil")
         group = QActionGroup(self)
+        self._language_actions: dict[str, QAction] = {}
         for code in LANGUAGES:
             action = QAction(_LANGUAGE_NAMES.get(code, code), self)
             action.setCheckable(True)
@@ -36,6 +37,7 @@ class MainWindow(QMainWindow):
             action.triggered.connect(lambda _=False, c=code: self.set_language(c))
             group.addAction(action)
             language_menu.addAction(action)
+            self._language_actions[code] = action
 
         version = tools.caps.version.split(" ")[0] if tools.caps.version else "?"
         info = QLabel(f"ffmpeg {version}  ·  {tools.directory}")
@@ -66,16 +68,29 @@ class MainWindow(QMainWindow):
     def set_language(self, code: str) -> None:
         """Dili degistirir ve arayuzu yeniden kurar. Yuklu dosyalar korunur."""
         if code == self.settings.language or self.analyze.runner.busy or self.encode.runner.busy:
+            # Reddedildi: menu tiklananin isaretli kalmasin, gecerli dil isaretli
+            # olsun (denetim D20).
+            current = self._language_actions.get(self.settings.language)
+            if current is not None:
+                current.setChecked(True)
             return
-        reference, test = self.analyze.reference.path, self.analyze.test.path
-        source = self.encode.source.path
+        analyze = self.analyze.state()
+        source, source_stream = self.encode.source.path, self.encode.source.stream_index
+        choice, folder = self.encode.choice(), self.encode.folder.text()
+        compare_after = self.encode.compare_after.isChecked()
+        current_tab = self.tabs.currentIndex()
         self.settings = self.encode.settings
         self.settings = Settings(**{**self.settings.__dict__, "language": code}).clamped()
         settings_mod.save(self.settings)
         self._build()
-        self.analyze.load(reference, test)
+        self.analyze.restore(analyze)
         if source is not None:
             self.encode.source.set_path(source)
+            self.encode.source.select_stream(source_stream)
+        self.encode.apply_choice(choice)
+        self.encode.folder.setText(folder)
+        self.encode.compare_after.setChecked(compare_after)
+        self.tabs.setCurrentIndex(current_tab)
 
     def closeEvent(self, event: QCloseEvent | None) -> None:
         for runner in (self.analyze.runner, self.encode.runner):
