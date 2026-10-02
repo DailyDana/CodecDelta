@@ -291,3 +291,28 @@ def test_a_relative_path_starting_with_a_dash_is_a_file(
     monkeypatch.chdir(tmp_path)
     info = probe(ffmpeg_tools.ffprobe, Path("-dash.flac"))
     assert info.audio and info.audio[0].codec == "flac"
+
+
+@pytest.mark.needs_ffmpeg
+def test_bit_depth_of_pcm_wav_and_aiff_is_read(ffmpeg_tools: FFmpegTools, tmp_path: Path) -> None:
+    """16-bit WAV/AIFF'te bit derinligi bos kaliyordu: bits_per_raw_sample N/A (D37)."""
+    import subprocess
+
+    for codec, name in (("pcm_s16le", "a.wav"), ("pcm_s16be", "a.aiff"), ("flac", "a.flac")):
+        target = tmp_path / name
+        subprocess.run(
+            [
+                str(ffmpeg_tools.ffmpeg),
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=duration=1",
+                "-c:a",
+                codec,
+                str(target),
+            ],
+            check=True,
+        )
+        assert probe(ffmpeg_tools.ffprobe, target).audio[0].bits_per_raw_sample == 16, name

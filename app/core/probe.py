@@ -215,7 +215,11 @@ def probe(
                 channels=_as_int(raw.get("channels")) or 0,
                 channel_layout=str(raw.get("channel_layout", "")),
                 sample_fmt=str(raw.get("sample_fmt", "")),
-                bits_per_raw_sample=_as_int(raw.get("bits_per_raw_sample")),
+                # 16-bit WAV/AIFF'te ffprobe bits_per_raw_sample vermiyor (N/A),
+                # yalnizca bits_per_sample; FLAC'ta tersi (denetim D37). 0 = bilinmiyor.
+                bits_per_raw_sample=_as_int(raw.get("bits_per_raw_sample"))
+                or _as_int(raw.get("bits_per_sample"))
+                or None,
                 bit_rate=_as_int(raw.get("bit_rate")),
                 duration=_as_float(raw.get("duration")),
                 language=str(tags.get("language")) if tags.get("language") else None,

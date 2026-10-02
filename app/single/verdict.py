@@ -356,7 +356,10 @@ def verify(
     """Tek dosyayi dogrular. Dosya kayipli formattaysa `not_applicable`."""
     stream = info.stream(stream_index)
     if not stream.is_lossless:
-        return Verdict("not_applicable", (), (), (f"codec {stream.codec} is lossy by design",))
+        note = Message(
+            "single.lossy_format", "codec {codec} is lossy by design", codec=stream.codec
+        )
+        return Verdict("not_applicable", (), (), (note,))
 
     starts: list[float | None] = [None]
     duration: float | None = None
