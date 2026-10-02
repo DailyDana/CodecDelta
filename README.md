@@ -7,8 +7,8 @@ against a YouTube rip, MP3 against AAC — and reports how much information was 
 the spectrum it went, and whether it is audible. It is also meant to answer the other common
 question from a single file with no reference: *is this FLAC really lossless, or a transcode?*
 
-> **Early version (0.2.0).** The analysis engine, the desktop window, encoding and shareable
-> reports work; blind ABX testing and batch scanning are not built yet. See [Status](#status).
+> **Early version (0.3.0).** The analysis engine, the desktop window, encoding, shareable
+> reports and blind ABX testing work; batch scanning is not built yet. See [Status](#status).
 
 ## Status
 
@@ -23,9 +23,10 @@ question from a single file with no reference: *is this FLAC really lossless, or
 | desktop window: analyze tab (compare, verify, ladder), English/Turkish | working — v0.1.0 |
 | encode panel: 12 codecs discovered from the ffmpeg build, bitrate / quality / advanced options, never overwrites, encode-then-compare | working |
 | HTML report: single self-contained file, charts as inline SVG, light/dark, paths and user names removed and audited before writing | working — v0.2.0 |
-| ABX test, batch scan, packaging | not started |
+| ABX blind test: aligned, level-matched, click-free switching (8 ms linear crossfade); fixed-n, sequential and practice modes; results that never read "no difference" | working — v0.3.0 |
+| batch scan, packaging | not started |
 
-492 tests, `ruff` + `mypy --strict` clean, CI on Windows.
+601 tests, `ruff` + `mypy --strict` clean, CI on Windows.
 
 ## Why this repository might be worth reading
 

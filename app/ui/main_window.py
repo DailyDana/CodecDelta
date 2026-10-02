@@ -6,10 +6,13 @@ from PyQt6.QtGui import QAction, QActionGroup, QCloseEvent
 from PyQt6.QtWidgets import QLabel, QMainWindow, QTabWidget, QWidget
 
 from app import __version__
+from app.compare.pipeline import Track
+from app.compare.result import ComparisonResult
 from app.core import settings as settings_mod
 from app.core.ffmpeg_locate import FFmpegTools
 from app.core.settings import Settings
 from app.ui.i18n import LANGUAGES, set_language, tr
+from app.ui.tab_abx import AbxPair, AbxTab
 from app.ui.tab_analyze import AnalyzeTab
 from app.ui.tab_encode import Encoded, EncodeTab
 
@@ -55,9 +58,19 @@ class MainWindow(QMainWindow):
         # Kodlama bittiginde Analiz mesgulse karsilastirma kuyruga alinir (D27).
         self._queued: Encoded | None = None
         self.analyze.runner.busy_changed.connect(self._run_queued)
+        self.abx = AbxTab(self.tools)
+        self.analyze.abx_requested.connect(self._on_abx_requested)
         self.tabs.addTab(self.analyze, tr("tab.analyze"))
         self.tabs.addTab(self.encode, tr("tab.encode"))
+        self.tabs.addTab(self.abx, tr("tab.abx"))
         self.setCentralWidget(self.tabs)
+
+    def _on_abx_requested(self, result: object, reference: object, test: object) -> None:
+        """Analiz'deki karsilastirmayi ABX sekmesine verir ve oraya gecer."""
+        assert isinstance(result, ComparisonResult)
+        assert isinstance(reference, Track) and isinstance(test, Track)
+        self.abx.set_pair(AbxPair(result, reference, test))
+        self.tabs.setCurrentWidget(self.abx)
 
     def _on_settings(self, settings: Settings) -> None:
         """Bir sekme ayar kaydetti: digerinin kopyasi bayat kalmasin (D21).
@@ -90,7 +103,14 @@ class MainWindow(QMainWindow):
 
     def set_language(self, code: str) -> None:
         """Dili degistirir ve arayuzu yeniden kurar. Yuklu dosyalar korunur."""
-        if code == self.settings.language or self.analyze.runner.busy or self.encode.runner.busy:
+        abx_active = self.abx.session is not None and not self.abx.session.finished
+        if (
+            code == self.settings.language
+            or self.analyze.runner.busy
+            or self.encode.runner.busy
+            or self.abx.runner.busy
+            or abx_active
+        ):
             # Reddedildi: menu tiklananin isaretli kalmasin, gecerli dil isaretli
             # olsun (denetim D20).
             current = self._language_actions.get(self.settings.language)
@@ -98,6 +118,7 @@ class MainWindow(QMainWindow):
                 current.setChecked(True)
             return
         analyze = self.analyze.state()
+        abx_pair = self.abx.pair
         source, source_stream = self.encode.source.path, self.encode.source.stream_index
         choice, folder = self.encode.choice(), self.encode.folder.text()
         compare_after = self.encode.compare_after.isChecked()
@@ -107,6 +128,7 @@ class MainWindow(QMainWindow):
         settings_mod.save(self.settings)
         self._build()
         self.analyze.restore(analyze)
+        self.abx.set_pair(abx_pair)
         if source is not None:
             self.encode.source.set_path(source)
             self.encode.source.select_stream(source_stream)
@@ -116,7 +138,8 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentIndex(current_tab)
 
     def closeEvent(self, event: QCloseEvent | None) -> None:
-        for runner in (self.analyze.runner, self.encode.runner):
+        self.abx.player.release()
+        for runner in (self.analyze.runner, self.encode.runner, self.abx.runner):
             if runner.busy:
                 runner.cancel()
                 runner.wait(10000)
