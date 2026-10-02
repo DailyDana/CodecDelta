@@ -577,3 +577,34 @@ def test_a_shifted_identical_copy_is_below_the_floor(
     assert result.broadband is not None and not result.broadband.measurable
     assert result.broadband.floor_db <= 140.0
     assert math.isnan(result.headline_snr_db)
+
+
+@pytest.mark.needs_ffmpeg
+def test_a_periodic_envelope_with_a_new_ending_still_aligns(
+    ffmpeg_tools: FFmpegTools, tmp_path: Path
+) -> None:
+    """Tremolo'lu (periyodik zarfli) kayitta sonu degisince zarf eslestirmesi bir
+    periyot katina kilitleniyor ve dosya hizalanamiyordu (D41)."""
+    ff = ffmpeg_tools.ffmpeg
+    reference = tmp_path / "trem.flac"
+    subprocess.run(
+        [
+            str(ff),
+            "-y",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "anoisesrc=color=pink:sample_rate=44100:duration=40:seed=21,tremolo=f=1.1:d=0.85",
+            "-ac",
+            "2",
+            "-c:a",
+            "flac",
+            str(reference),
+        ],
+        check=True,
+    )
+    result = _run(ffmpeg_tools, reference, _spliced(ff, reference, tmp_path / "end.opus", 30))
+    assert result.status == "measured", (result.plan.reasons, result.notes)
+    assert 8.0 < result.excluded_s < 13.0

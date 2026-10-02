@@ -468,6 +468,23 @@ def estimate_from_audio(
             window_s=window_s,
             min_correlation=min_correlation,
         )
+        if candidate == 1.0 and len(anchors) < MIN_ANCHORS and lag_s:
+            # Zarf yaniltabilir: zarfi periyodik bir kayitta sonu degistirilmis
+            # dosyada eslestirme degisen kuyrugu disarida birakan bir periyot
+            # katina (-17.27 s) kilitleniyordu (denetim D41). Ayni kaydin iki
+            # kodlamasi cogunlukla ayni zaman cizgisindedir; capalar bir kez de
+            # sifir gecikme etrafinda aranir, daha cok capa veren kazanir.
+            at_zero = collect_anchors(
+                reference_samples,
+                compensated,
+                sample_rate,
+                coarse_lag_s=0.0,
+                count=count,
+                window_s=window_s,
+                min_correlation=min_correlation,
+            )
+            if len(at_zero) > len(anchors):
+                anchors = at_zero
         if candidate == 1.0 and _is_periodic(anchors):
             # Hipotez yarisina sokulmaz: olceklenmis bir periyodik sinyal de
             # periyodiktir ama kaydirilmis frekans tepeleri esitsizlestirip
