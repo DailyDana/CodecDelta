@@ -38,6 +38,12 @@ from app.dsp.transforms import fractional_shift, to_mono
 
 DEFAULT_EXCERPT_S = 30.0
 
+# Zincirin sayisal tabani (dB). PCM float32 olarak tasiniyor (24 bit mantis,
+# goreli hassasiyet ~ -144 dB); 140 dB pay birakir. Yeniden ornekleme ve kesirli
+# gecikme yoksa olculen taban sonsuzdu ve kaydirilmis birebir bir kopya 165 dB ile
+# "olculebilir" cikiyordu (denetim D33). Hicbir codec bu seviyeye yaklasmiyor.
+NUMERIC_FLOOR_DB = 140.0
+
 
 def _decode_mono(
     ffmpeg: Path,

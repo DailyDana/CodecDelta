@@ -542,6 +542,7 @@ def compare(
         # manset NaN cikiyordu (denetim D7): baska bir konum denenir.
         if not math.isnan(floors[-1]):
             break
+    floors = [calibration.combine_floors(f, calibration.NUMERIC_FLOOR_DB) for f in floors]
 
     gain = mid.gain(
         hz_to_bin(broadband_hz[0], rate, fft_size), hz_to_bin(broadband_hz[1], rate, fft_size)

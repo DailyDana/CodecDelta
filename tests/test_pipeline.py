@@ -566,3 +566,14 @@ def test_drift_has_the_same_sign_in_plan_and_notes(
     assert result.plan.drift is not None and result.plan.drift.ppm > 0
     tracked = next(n for n in result.notes if getattr(n, "key", "") == "compare.tracked")
     assert tracked.params["ppm"] > 0
+
+
+@pytest.mark.needs_ffmpeg
+def test_a_shifted_identical_copy_is_below_the_floor(
+    ffmpeg_tools: FFmpegTools, files: dict[str, Path]
+) -> None:
+    """Kaydirilmis kayipsiz kopya 165 dB ile "olculebilir" cikiyordu (D33)."""
+    result = _run(ffmpeg_tools, files["ref"], files["delayed"])
+    assert result.broadband is not None and not result.broadband.measurable
+    assert result.broadband.floor_db <= 140.0
+    assert math.isnan(result.headline_snr_db)
