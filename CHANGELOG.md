@@ -8,6 +8,8 @@ While the version is `0.x`, the API may break between minor versions.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-02
+
 Fixes from the September 2026 audit (`docs/AUDIT-2026-09.md`: 46 findings,
 all addressed). Highlights:
 
