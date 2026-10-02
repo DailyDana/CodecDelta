@@ -926,3 +926,25 @@ Bulgular ve durumlari: `docs/AUDIT-2026-09.md`.
   Python'un `:.0%` bicimi onu hep sona koyuyordu.
 - Bulunan yan hata: D1'in blok kapisi PHAT tepesini isaretli ariyordu; ters
   polariteli kayipsiz kopya olculmuyordu. Tepe artik mutlak degerle aranir.
+
+## Kutuphane taramasi (v0.4.0)
+
+- **Kademeli ornekleme.** Asama 0 ffprobe (kayipli bicim cozulmeden gecer),
+  asama 1 ortadan 20 s, asama 2 yalnizca belirsizde %15 ve %80'den 20'ser s
+  daha. Ek kesitler AYNI spektral biriktiriciye eklenir (her kesitte STFT
+  sifirlanir); kanit uc kesitin toplamindan cikar. Kalibrasyon setinin 231
+  dosyasinda 220'si asama 1'de bitti; gercek kayitlar 21/21 kayipsiz.
+- **ThreadPoolExecutor**, isci basina en fazla iki is kuyrukta: iptal yeni is
+  baslatmaz. Kodlama sekmesiyle paylasilan ffmpeg semaforu (`core.tasks`).
+- **Onbellek JSON**, anahtar (yol, boyut, mtime_ns); kayit kural surumunu
+  (`app.__version__`) tasir, esik degisince eski hukum kullanilmaz. Atomik
+  yazma, 25 sonucta bir ve sonda. SQLite gerekmedi: kayit sayisi binler
+  mertebesinde, tum dosya bir seferde okunup yaziliyor.
+- **Arayuz** sonuclari kuyruktan 200 ms'de bir toplu ekler.
+- Olculen (sicak disk onbellegi, 6 isci): 231 dosya 24.8 s (0.107 s/dosya),
+  34 tam parca 2.9 s; 1000 dosya ~85-110 s, planin 75-120 s hedefinde. Soguk
+  disk ve HDD OLCULMEDI.
+- Kalibrasyon dugmesi (kullanicinin kendi dosyalarindan esik ayari) bu surumde
+  yok: esik marjlari dar (20.75 kHz kapisi her iki yana ~120 Hz) ve kullanici
+  verisiyle otomatik ayar dogrulanmadan yanlis pozitif uretebilir. v1.0 icin
+  ayri ele alinacak.

@@ -8,6 +8,25 @@ While the version is `0.x`, the API may break between minor versions.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-02
+
+### Added
+- **Library scan** (new tab): scans a folder for lossless files (FLAC, WAV,
+  AIFF, ALAC, APE, WavPack, TTA, TAK...) whose spectrum is consistent with a
+  lossy source. Each file is judged on a 20 s excerpt from the middle; only
+  when that is undetermined are two more excerpts (15 % and 80 %) added to the
+  same evidence. Files in a lossy format are listed as not applicable without
+  being decoded.
+- Files are scanned in parallel; unchanged files are remembered between scans
+  (keyed by path, size and modification time), so a cancelled scan resumes and
+  a rescan is instant. New thresholds in a later version invalidate old
+  verdicts.
+- The list shows the verdict, the cutoff and the main reason, filters by
+  verdict, sorts, and exports to CSV; double-clicking a file opens its full
+  verification in the Analyze tab.
+- Measured on this machine (warm disk cache, 6 workers): 231 files in 24.8 s
+  and 34 full-length tracks in 2.9 s, i.e. about 85-110 s per 1000 files.
+
 ## [0.3.0] - 2026-10-02
 
 ### Added
