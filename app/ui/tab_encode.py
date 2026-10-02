@@ -72,6 +72,8 @@ def _card(title: str) -> tuple[QFrame, QVBoxLayout]:
 
 class EncodeTab(QWidget):
     encoded = pyqtSignal(object)
+    # Ayarlar (orn. cikti klasoru) kaydedildi; diger sekmeler guncellenmeli (D21).
+    settings_changed = pyqtSignal(object)
 
     def __init__(
         self, tools: FFmpegTools, settings: Settings, parent: QWidget | None = None
@@ -158,11 +160,11 @@ class EncodeTab(QWidget):
         self.folder = QLineEdit(settings.output_dir)
         self.folder.setPlaceholderText(tr("encode.output_placeholder"))
         self.folder.textChanged.connect(lambda _: self._refresh())
-        browse = QPushButton(tr("encode.browse"))
-        browse.clicked.connect(self._browse)
+        self.browse = QPushButton(tr("encode.browse"))
+        self.browse.clicked.connect(self._browse)
         folder_row = QHBoxLayout()
         folder_row.addWidget(self.folder, 1)
-        folder_row.addWidget(browse)
+        folder_row.addWidget(self.browse)
         self.preview = QLabel()
         self.preview.setObjectName("Muted")
         self.compare_after = QCheckBox(tr("encode.compare_after"))
@@ -384,7 +386,21 @@ class EncodeTab(QWidget):
     def _on_busy(self, busy: bool) -> None:
         self.progress.setVisible(busy)
         self.cancel_button.setVisible(busy)
-        for widget in (self.source, self.codec, self.folder, self.compare_after):
+        # Kodlama surerken TUM ayarlar kilitli: once bit hizi/kalite/gelismis
+        # secenekler acik kaliyor, degistirilince onizleme isle uyusmuyordu (D25).
+        for widget in (
+            self.source,
+            self.codec,
+            self.mode_bitrate,
+            self.mode_quality,
+            self.bitrate,
+            self.quality,
+            self.advanced_toggle,
+            self.advanced,
+            self.folder,
+            self.browse,
+            self.compare_after,
+        ):
             widget.setEnabled(not busy)
         self._refresh()
 
@@ -415,8 +431,8 @@ class EncodeTab(QWidget):
             job, _ = self._draft(output)
         except jobs.EncodeUnsupportedError as exc:
             QMessageBox.critical(self, tr("error.encode"), localize(exc.args[0]))
+            self._taken.discard(output)
             return
-        self._remember_folder()
         duration = info.stream(stream_index).duration or info.duration
         self._pending = Encoded(info.path, stream_index, output, self.compare_after.isChecked())
         ffmpeg = self.tools.ffmpeg
@@ -439,20 +455,33 @@ class EncodeTab(QWidget):
         if folder != self.settings.output_dir:
             self.settings = Settings(**{**self.settings.__dict__, "output_dir": folder}).clamped()
             settings_mod.save(self.settings)
+            self.settings_changed.emit(self.settings)
 
     def _on_done(self, output: object, seconds: float) -> None:
         assert isinstance(output, Path)
         self.stage.setText(tr("encode.done", name=output.name, seconds=seconds))
         pending, self._pending = self._pending, None
+        # Klasor yalnizca basarili bir kodlamadan sonra hatirlanir (D22).
+        self._remember_folder()
         self._refresh()
         if pending is not None:
             self.encoded.emit(pending)
 
-    def _on_failed(self, message: str) -> None:
+    def _release(self) -> None:
+        """Basarisiz/iptal edilen kodlamanin ad rezervasyonunu birakir (D22).
+
+        Rezerve kalan ad bir sonraki denemeyi gereksiz yere `_2` yapiyordu.
+        """
+        if self._pending is not None:
+            self._taken.discard(self._pending.output)
         self._pending = None
+        self._refresh()
+
+    def _on_failed(self, message: str) -> None:
+        self._release()
         self.stage.setText("")
         QMessageBox.critical(self, tr("error.encode"), message)
 
     def _on_cancelled(self) -> None:
-        self._pending = None
+        self._release()
         self.stage.setText(tr("stage.cancelled"))

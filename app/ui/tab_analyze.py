@@ -273,6 +273,10 @@ class AnalyzeTab(QWidget):
         self.test = FileSlot(tr("slot.test"), tools.ffprobe)
         for slot in (self.reference, self.test):
             slot.changed.connect(self._update_buttons)
+        # Iki dosya birlikte birakilirsa ikincisi diger yuvaya gider; once
+        # sessizce atiliyordu (D26).
+        self.reference.dropped_more.connect(lambda paths: self.test.set_path(paths[0]))
+        self.test.dropped_more.connect(lambda paths: self.reference.set_path(paths[0]))
         slots = QHBoxLayout()
         slots.setSpacing(12)
         slots.addWidget(self.reference)

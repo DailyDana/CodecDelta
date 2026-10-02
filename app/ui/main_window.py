@@ -51,14 +51,37 @@ class MainWindow(QMainWindow):
         self.analyze = AnalyzeTab(self.tools, self.settings)
         self.encode = EncodeTab(self.tools, self.settings)
         self.encode.encoded.connect(self._on_encoded)
+        self.encode.settings_changed.connect(self._on_settings)
+        # Kodlama bittiginde Analiz mesgulse karsilastirma kuyruga alinir (D27).
+        self._queued: Encoded | None = None
+        self.analyze.runner.busy_changed.connect(self._run_queued)
         self.tabs.addTab(self.analyze, tr("tab.analyze"))
         self.tabs.addTab(self.encode, tr("tab.encode"))
         self.setCentralWidget(self.tabs)
 
+    def _on_settings(self, settings: Settings) -> None:
+        """Bir sekme ayar kaydetti: digerinin kopyasi bayat kalmasin (D21).
+
+        Analiz, raporun onerilen klasorunu kendi ayar kopyasindan okuyordu ve
+        Kodlama'da secilen klasor oraya hic yansimiyordu.
+        """
+        self.settings = settings
+        self.analyze.settings = settings
+
+    def _run_queued(self, busy: bool) -> None:
+        if not busy and self._queued is not None:
+            queued, self._queued = self._queued, None
+            self._on_encoded(queued)
+
     def _on_encoded(self, done: Encoded) -> None:
         """Kodlama bitti: istenmisse Analiz'e gec, kaynak/cikti ile karsilastir."""
-        self.settings = self.encode.settings
-        if not done.compare or self.analyze.runner.busy:
+        self._on_settings(self.encode.settings)
+        if not done.compare:
+            return
+        if self.analyze.runner.busy:
+            # Once sessizce atlaniyordu (D27): Analiz'deki is bitince baslar.
+            self._queued = done
+            self.analyze.stage.setText(tr("encode.compare_queued", name=done.output.name))
             return
         self.analyze.load(done.source, done.output)
         self.analyze.reference.select_stream(done.stream_index)
