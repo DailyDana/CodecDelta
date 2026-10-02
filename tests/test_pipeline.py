@@ -555,3 +555,14 @@ def test_dual_mono_has_no_side_to_measure(ffmpeg_tools: FFmpegTools, tmp_path: P
     assert result.broadband is not None and result.broadband.side is None
     assert all(b.side is None for b in result.bands)
     assert any(getattr(n, "key", "") == "compare.no_side" for n in result.notes)
+
+
+@pytest.mark.needs_ffmpeg
+def test_drift_has_the_same_sign_in_plan_and_notes(
+    ffmpeg_tools: FFmpegTools, files: dict[str, Path]
+) -> None:
+    """Plan +204 ppm derken not -204 ppm diyordu (D32)."""
+    result = _run(ffmpeg_tools, files["ref"], files["drift"])
+    assert result.plan.drift is not None and result.plan.drift.ppm > 0
+    tracked = next(n for n in result.notes if getattr(n, "key", "") == "compare.tracked")
+    assert tracked.params["ppm"] > 0

@@ -440,7 +440,10 @@ def compare(
                 "compare.tracked",
                 "clock drift tracked: {ppm:+.2f} ppm, largest deviation from the fit "
                 "{residual:.3f} samples",
-                ppm=model.slope * 1e6,
+                # Model egimi `1 - oran`; plan gerekcesi oran - 1 gosteriyor. Ayni
+                # isaret kullanilmazsa ayni kayma bir yerde +, otekinde - cikiyordu
+                # (denetim D32).
+                ppm=-model.slope * 1e6,
                 residual=model.max_residual,
             )
         )
