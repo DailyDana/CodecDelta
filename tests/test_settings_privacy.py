@@ -249,3 +249,10 @@ def test_absurdly_nested_settings_fall_back_to_defaults(tmp_path: Path) -> None:
     target = tmp_path / "settings.json"
     target.write_text("[" * 100_000 + "]" * 100_000, encoding="utf-8")
     assert load(target) == Settings()
+
+
+def test_tests_never_touch_the_real_settings(tmp_path_factory: pytest.TempPathFactory) -> None:
+    """conftest APPDATA'yi yalitir: bir test gercek ayarlara yazmisti (Ekim 2026)."""
+    from app.core.settings import config_dir
+
+    assert config_dir().is_relative_to(tmp_path_factory.getbasetemp())
