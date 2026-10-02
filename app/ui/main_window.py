@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PyQt6.QtGui import QAction, QActionGroup, QCloseEvent
 from PyQt6.QtWidgets import QLabel, QMainWindow, QTabWidget, QWidget
 
@@ -14,6 +16,7 @@ from app.core.settings import Settings
 from app.ui.i18n import LANGUAGES, set_language, tr
 from app.ui.tab_abx import AbxPair, AbxTab
 from app.ui.tab_analyze import AnalyzeTab
+from app.ui.tab_batch import BatchTab
 from app.ui.tab_encode import Encoded, EncodeTab
 
 _LANGUAGE_NAMES = {"en": "English", "tr": "Türkçe"}
@@ -60,10 +63,22 @@ class MainWindow(QMainWindow):
         self.analyze.runner.busy_changed.connect(self._run_queued)
         self.abx = AbxTab(self.tools)
         self.analyze.abx_requested.connect(self._on_abx_requested)
+        self.batch = BatchTab(self.tools)
+        self.batch.verify_requested.connect(self._on_verify_requested)
         self.tabs.addTab(self.analyze, tr("tab.analyze"))
         self.tabs.addTab(self.encode, tr("tab.encode"))
         self.tabs.addTab(self.abx, tr("tab.abx"))
+        self.tabs.addTab(self.batch, tr("tab.batch"))
         self.setCentralWidget(self.tabs)
+
+    def _on_verify_requested(self, path: object) -> None:
+        """Taramadan secilen dosyayi Analiz'de tek dosya dogrulamasiyla acar."""
+        assert isinstance(path, Path)
+        if self.analyze.runner.busy:
+            return
+        self.analyze.reference.set_path(path)
+        self.tabs.setCurrentWidget(self.analyze)
+        self.analyze.start_verify()
 
     def _on_abx_requested(self, result: object, reference: object, test: object) -> None:
         """Analiz'deki karsilastirmayi ABX sekmesine verir ve oraya gecer."""
@@ -109,6 +124,7 @@ class MainWindow(QMainWindow):
             or self.analyze.runner.busy
             or self.encode.runner.busy
             or self.abx.runner.busy
+            or self.batch.runner.busy
             or abx_active
         ):
             # Reddedildi: menu tiklananin isaretli kalmasin, gecerli dil isaretli
@@ -119,6 +135,7 @@ class MainWindow(QMainWindow):
             return
         analyze = self.analyze.state()
         abx_pair = self.abx.pair
+        batch = (self.batch.folder.text(), self.batch._root, self.batch.entries)
         source, source_stream = self.encode.source.path, self.encode.source.stream_index
         choice, folder = self.encode.choice(), self.encode.folder.text()
         compare_after = self.encode.compare_after.isChecked()
@@ -129,6 +146,7 @@ class MainWindow(QMainWindow):
         self._build()
         self.analyze.restore(analyze)
         self.abx.set_pair(abx_pair)
+        self.batch.restore(*batch)
         if source is not None:
             self.encode.source.set_path(source)
             self.encode.source.select_stream(source_stream)
@@ -139,7 +157,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent | None) -> None:
         self.abx.player.release()
-        for runner in (self.analyze.runner, self.encode.runner, self.abx.runner):
+        for runner in (self.analyze.runner, self.encode.runner, self.abx.runner, self.batch.runner):
             if runner.busy:
                 runner.cancel()
                 runner.wait(10000)
