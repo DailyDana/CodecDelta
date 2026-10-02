@@ -11,6 +11,20 @@ from app.core.errors import CodecDeltaError
 from app.core.ffmpeg_locate import FFmpegTools, discover
 
 
+@pytest.fixture(autouse=True)
+def _isolated_config(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ayarlar, yetenek ve tarama onbellegi test basina gecici bir APPDATA'ya.
+
+    Yoksa ayar kaydeden arayuz testleri kullanicinin gercek
+    `%APPDATA%\\CodecDelta\\settings.json`'una yaziyordu (kodlama klasoru bir
+    pytest gecici klasorunde kaliyordu). LOCALAPPDATA'ya dokunulmaz: ffmpeg
+    kesfi winget kopyasini orada arar.
+    """
+    monkeypatch.setenv("APPDATA", str(tmp_path_factory.mktemp("appdata")))
+
+
 @pytest.fixture(scope="session")
 def ffmpeg_tools() -> FFmpegTools:
     """Sistemde bulunan ffmpeg+ffprobe cifti.

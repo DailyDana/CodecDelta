@@ -82,6 +82,7 @@ QPushButton {{
     border: 1px solid {C["surface1"]}; border-radius: 6px; padding: 7px 16px;
 }}
 QPushButton:hover {{ background: {C["surface1"]}; }}
+QPushButton:checked {{ background: {C["accent"]}; border-color: {C["accent"]}; color: white; }}
 QPushButton:disabled {{ color: {C["overlay0"]}; background: {C["mantle"]}; border-color: {C["surface0"]}; }}
 QPushButton#Primary {{ background: {C["accent"]}; border: none; color: white; font-weight: 600; }}
 QPushButton#Primary:hover {{ background: {C["accent_hover"]}; }}
