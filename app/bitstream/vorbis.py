@@ -159,6 +159,7 @@ def scan(path: Path, *, full_scan_limit: int = FULL_SCAN_LIMIT) -> VorbisInfo | 
 
 def _duration(stats: ScanStats, sample_rate: int) -> float | None:
     """Vorbis'te granule dogrudan ornek sayisidir; Opus'taki pre-skip yok."""
-    if stats.last_granule is None or sample_rate <= 0:
+    if stats.last_granule is None or sample_rate <= 0 or stats.chained:
+        # Zincirli Ogg: bkz. `opus._granule_duration` (G2).
         return None
     return stats.last_granule / sample_rate

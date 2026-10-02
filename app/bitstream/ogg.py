@@ -132,6 +132,13 @@ class ScanStats:
     first_granule: int | None = None
     last_granule: int | None = None
     serials: set[int] = field(default_factory=set)
+    # Ilk gorulen akisin seri numarasi; paketler ve granule yalnizca ondan.
+    primary_serial: int | None = None
+
+    @property
+    def chained(self) -> bool:
+        """Birden fazla mantiksal akis (zincirli ya da coklu akisli Ogg)."""
+        return len(self.serials) > 1
 
 
 def parse_page(data: bytes, offset: int = 0, *, verify_crc: bool = True) -> Page | None:
@@ -228,6 +235,10 @@ def iter_pages(data: bytes, start: int = 0) -> Iterator[Page]:
         index += 1
 
 
+# Granule alani "bu sayfada biten paket yok" icin tum bitleri 1 tasir.
+_NO_GRANULE = (1 << 64) - 1
+
+
 def iter_packets(pages: Iterator[Page], stats: ScanStats | None = None) -> Iterator[bytes]:
     """Sayfalardan paketleri yeniden kurar.
 
@@ -239,7 +250,12 @@ def iter_packets(pages: Iterator[Page], stats: ScanStats | None = None) -> Itera
     """
     current = bytearray()
     have_start = True
+    primary = stats.primary_serial if stats is not None else None
     for page in pages:
+        if primary is None:
+            primary = page.serial
+            if stats is not None:
+                stats.primary_serial = primary
         if stats is not None:
             stats.pages += 1
             stats.serials.add(page.serial)
@@ -247,6 +263,12 @@ def iter_packets(pages: Iterator[Page], stats: ScanStats | None = None) -> Itera
                 stats.crc_checked_pages += 1
                 if not page.crc_ok:
                     stats.bad_crc_pages += 1
+        if page.serial != primary:
+            # Baska bir mantiksal akis (coklu akis, zincir): paketleri ve
+            # granule'u bizim akisimiza karismasin. Once son sayfanin granule'u
+            # hangi akistan olursa olsun sure diye okunuyordu (denetim G2).
+            continue
+        if stats is not None and 0 <= page.granule < _NO_GRANULE:
             if stats.first_granule is None:
                 stats.first_granule = page.granule
             stats.last_granule = page.granule
@@ -254,6 +276,12 @@ def iter_packets(pages: Iterator[Page], stats: ScanStats | None = None) -> Itera
         if page.continued and not current:
             # Sayfa, bizim gormedigimiz bir paketin devami: o paketi atla.
             have_start = False
+        elif current and not page.continued:
+            # Onceki sayfa yarim bir paketle bitti ama bu sayfa "devam" demiyor
+            # (kayip ya da bozuk sayfa): yetim kuyruk atilir, yeni paketle
+            # birlestirilmez (denetim G3).
+            current = bytearray()
+            have_start = True
         pos = 0
         for seg in page.segments:
             current += page.body[pos : pos + seg]

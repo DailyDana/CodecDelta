@@ -312,7 +312,9 @@ def _granule_duration(stats: ScanStats, pre_skip: int) -> float | None:
     sure birkac milisaniye uzun gorunur. Ornekleme yapildiysa son bolge dosyanin
     sonunu kapsadigi icin bu deger yine gecerlidir.
     """
-    if stats.last_granule is None:
+    if stats.last_granule is None or stats.chained:
+        # Zincirli Ogg'da her zincirin granule'u bastan baslar; orneklenmis
+        # taramada sureler toplanamaz, bilinmiyor denir (G2).
         return None
     samples = stats.last_granule - pre_skip
     return samples / OPUS_RATE if samples > 0 else None
