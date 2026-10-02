@@ -26,6 +26,7 @@ kareler egimini tamamen cevirir.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Literal
 
@@ -68,6 +69,17 @@ _MAX_RESIDUAL_MS = 20.0
 # bunun altinda tek bir bozuk capaya karsi kirilgan hale geliyor.
 MIN_ANCHORS = 12
 
+# Capalarin medyan belirsizligi (`gccphat.ambiguity`) bunu asarsa sinyal
+# periyodik sayilir. Olculen: saf sinus, iki ton ~1.0; gercek muzik (5 parca)
+# ve sentetik muzik <= 0.21; agir EQ'lu gurultu 0.24. Periyodik sinyalde her
+# capa baska bir periyot katini secer ve Theil-Sen bunlardan +3004 ppm ya da
+# "NTSC" uyduruyordu (denetim D6).
+MAX_MEDIAN_AMBIGUITY = 0.5
+# Periyodiklik karari icin gereken en az capa. Fit icin gerekenden (12) az:
+# periyodik sinyalde capalar korelasyon esigine de takilabiliyor (Opus'lu iki
+# ton: 8 capa) ve karar yine acik.
+_MIN_PERIODIC_ANCHORS = 5
+
 # Capa penceresinin varsayilan uzunlugu. Kisa olmasi ZORUNLU: pencere icinde
 # biriken kayma `window * (ratio - 1)` ornektir ve icerigin periyodunun yarisini
 # astiginda korelasyon coker. OLCULEN (8 kHz, 300 s, 30 capa):
@@ -108,6 +120,8 @@ class Anchor:
     # Hizalanmis pencerelerin Pearson korelasyonu (ISARETLI).
     correlation: float
     psr: float
+    # bkz. `gccphat.ambiguity`. Periyodik sinyalde ~1.
+    ambiguity: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -125,6 +139,9 @@ class DriftEstimate:
     # Theil-Sen kalintilarinin medyan mutlak sapmasi, milisaniye. Fit'in ne
     # kadar tutarli oldugunun olcusu.
     residual_ms: float
+    # Capalarin cogu periyodik bir sinyale dustu: gecikme belirsiz, hiz orani
+    # olculemez. Durum bu durumda her zaman "unreliable".
+    periodic: bool = False
 
     @property
     def ppm(self) -> float:
@@ -154,9 +171,53 @@ class DriftEstimate:
         return self.status == "drift" and not self.is_resampling and abs(self.ppm) > _NEGLIGIBLE_PPM
 
 
+class _Lazy:
+    """Bir ornek dizisini pencere pencere float64 olarak veren gorunum.
+
+    Tam boy kopya hic yapilmaz: int16 zarf ornekleri yalnizca okunan pencerede
+    float64'e cevrilir, `ratio` verilirse hiz telafisi (dogrusal interpolasyon)
+    da yalnizca o pencerede hesaplanir. Once ornekler tumden float64'e
+    cevriliyor ve her PAL hipotezi icin test yeniden orneklenmis tam bir kopya
+    oluyordu: 60 dakikalik ciftte 1.9 GB (denetim D5).
+
+    Dogrusal interpolasyon yeterli: amac hangi HIPOTEZIN daha iyi hizalandigini
+    secmek; interpolasyon hatasi tum adaylara ayni bulasir ve sadelesir. Nihai
+    telafi boru hattinda soxr ile yapilir.
+    """
+
+    def __init__(self, data: np.ndarray, ratio: float = 1.0) -> None:
+        if isinstance(data, _Lazy):
+            raise TypeError("_Lazy ic ice kullanilmaz")
+        ensure_signal(data, "samples")
+        self._data = data
+        self._ratio = ratio
+        self.size = data.size if ratio == 1.0 else max(0, int(data.size / ratio))
+
+    def __getitem__(self, window: slice) -> np.ndarray:
+        start, stop, _ = window.indices(self.size)
+        if stop <= start:
+            return np.zeros(0, dtype=np.float64)
+        if self._ratio == 1.0:
+            return self._data[start:stop].astype(np.float64)
+        positions = np.arange(start, stop) * self._ratio
+        lo = int(positions[0])
+        hi = min(self._data.size, int(np.ceil(positions[-1])) + 2)
+        source = self._data[lo:hi].astype(np.float64)
+        result: np.ndarray = np.interp(positions, np.arange(lo, hi), source)
+        return result
+
+    def chunks(self, size: int) -> Iterator[np.ndarray]:
+        for start in range(0, self.size, size):
+            yield self[start : start + size]
+
+
+def _lazy(x: np.ndarray | _Lazy) -> _Lazy:
+    return x if isinstance(x, _Lazy) else _Lazy(x)
+
+
 def collect_anchors(
-    reference: np.ndarray,
-    test: np.ndarray,
+    reference: np.ndarray | _Lazy,
+    test: np.ndarray | _Lazy,
     sample_rate: int,
     *,
     coarse_lag_s: float = 0.0,
@@ -180,8 +241,7 @@ def collect_anchors(
     Theil-Sen bunlara dayanikli olsa da, once elenmeleri fit'i belirgin
     iyilestirir.
     """
-    ensure_signal(reference, "reference")
-    ensure_signal(test, "test")
+    reference, test = _lazy(reference), _lazy(test)
     if sample_rate <= 0:
         raise ValueError("sample_rate pozitif olmali")
     if count < 2:
@@ -234,6 +294,7 @@ def collect_anchors(
                 lag_s=lag_samples / sample_rate,
                 correlation=correlation,
                 psr=estimate.psr,
+                ambiguity=gccphat.ambiguity(reference[lo:hi], window_test),
             )
         )
     return anchors
@@ -292,6 +353,8 @@ def estimate(anchors: list[Anchor], *, min_anchors: int = MIN_ANCHORS) -> DriftE
             residual_ms=float("inf"),
         )
 
+    if _is_periodic(anchors):
+        return _periodic(anchors)
     x = np.array([a.position_s for a in anchors], dtype=np.float64)
     y = np.array([a.lag_s for a in anchors], dtype=np.float64)
     slope, offset = theil_sen(x, y)
@@ -312,6 +375,24 @@ def estimate(anchors: list[Anchor], *, min_anchors: int = MIN_ANCHORS) -> DriftE
     return _classify(ratio, offset, len(anchors), residual_ms)
 
 
+def _is_periodic(anchors: list[Anchor]) -> bool:
+    return len(anchors) >= _MIN_PERIODIC_ANCHORS and (
+        float(np.median([a.ambiguity for a in anchors])) > MAX_MEDIAN_AMBIGUITY
+    )
+
+
+def _periodic(anchors: list[Anchor]) -> DriftEstimate:
+    return DriftEstimate(
+        ratio=1.0,
+        offset_s=float(np.median([a.lag_s for a in anchors])),
+        status="unreliable",
+        label=None,
+        anchors=len(anchors),
+        residual_ms=float("inf"),
+        periodic=True,
+    )
+
+
 def _classify(ratio: float, offset_s: float, anchors: int, residual_ms: float) -> DriftEstimate:
     """Guvenilir bir orani tabloya yakalar ya da ihmal edilebilir sayar.
 
@@ -326,23 +407,6 @@ def _classify(ratio: float, offset_s: float, anchors: int, residual_ms: float) -
     if abs(ratio - 1.0) * 1e6 <= _NEGLIGIBLE_PPM:
         return DriftEstimate(1.0, offset_s, "none", None, anchors, residual_ms)
     return DriftEstimate(ratio, offset_s, "drift", None, anchors, residual_ms)
-
-
-def _rescale(x: np.ndarray, ratio: float) -> np.ndarray:
-    """`x`'i `ratio` kati hizli calan bir kopyaya cevirir.
-
-    Dogrusal interpolasyon yeterli: burada amac mutlak dogruluk degil, hangi
-    HIPOTEZIN digerlerinden daha iyi hizalandigini secmek. Secim goreli oldugu
-    icin interpolasyonun kendi hatasi tum adaylara ayni sekilde bulasir ve
-    sadelesir. Nihai telafi boru hattinda soxr ile yapilir.
-    """
-    if ratio == 1.0:
-        return x
-    count = int(x.size / ratio)
-    if count < 2:
-        return x[:0]
-    scaled: np.ndarray = np.interp(np.arange(count) * ratio, np.arange(x.size), x)
-    return scaled
 
 
 def estimate_from_audio(
@@ -372,19 +436,22 @@ def estimate_from_audio(
     gecikme kayit boyunca %4 degisir, zarf eslestirmesi ortalama bir yer secer
     ve 60 s'lik bir dosyada bile kaydin basinda 1 s'den fazla sapar.
     """
+    reference_samples, test_samples = _Lazy(reference), test
     reference_envelope = (
-        envelope.from_samples(reference, sample_rate, keep_samples=False)
+        envelope.from_chunks(reference_samples.chunks(sample_rate), sample_rate, keep_samples=False)
         if coarse_lag_s is None
         else None
     )
     best: tuple[float, float, DriftEstimate] | None = None
     for candidate in _HYPOTHESES:
-        compensated = _rescale(test, 1.0 / candidate)
+        compensated = _Lazy(test_samples, 1.0 / candidate)
         lag_s = coarse_lag_s
         if reference_envelope is not None:
             match = envelope.coarse_match(
                 reference_envelope,
-                envelope.from_samples(compensated, sample_rate, keep_samples=False),
+                envelope.from_chunks(
+                    compensated.chunks(sample_rate), sample_rate, keep_samples=False
+                ),
             )
             # Zarf bilgisizse (dinamigi duz icerik) gecikmesine guvenilmez ve
             # sifira dusulur -- ama hipotez ELENMEZ. Ilk surum burada eliyordu
@@ -393,7 +460,7 @@ def estimate_from_audio(
             # capalar verir; zarf yalnizca nereye bakilacagini soyler.
             lag_s = match.lag_s if match.rho >= MIN_ENVELOPE_CORRELATION else 0.0
         anchors = collect_anchors(
-            reference,
+            reference_samples,
             compensated,
             sample_rate,
             coarse_lag_s=lag_s if lag_s is not None else 0.0,
@@ -401,6 +468,28 @@ def estimate_from_audio(
             window_s=window_s,
             min_correlation=min_correlation,
         )
+        if candidate == 1.0 and len(anchors) < MIN_ANCHORS and lag_s:
+            # Zarf yaniltabilir: zarfi periyodik bir kayitta sonu degistirilmis
+            # dosyada eslestirme degisen kuyrugu disarida birakan bir periyot
+            # katina (-17.27 s) kilitleniyordu (denetim D41). Ayni kaydin iki
+            # kodlamasi cogunlukla ayni zaman cizgisindedir; capalar bir kez de
+            # sifir gecikme etrafinda aranir, daha cok capa veren kazanir.
+            at_zero = collect_anchors(
+                reference_samples,
+                compensated,
+                sample_rate,
+                coarse_lag_s=0.0,
+                count=count,
+                window_s=window_s,
+                min_correlation=min_correlation,
+            )
+            if len(at_zero) > len(anchors):
+                anchors = at_zero
+        if candidate == 1.0 and _is_periodic(anchors):
+            # Hipotez yarisina sokulmaz: olceklenmis bir periyodik sinyal de
+            # periyodiktir ama kaydirilmis frekans tepeleri esitsizlestirip
+            # sahte bir dogru uretebiliyor (1 kHz sinus: +3004 ppm).
+            return _periodic(anchors)
         if len(anchors) < MIN_ANCHORS:
             continue
         score = float(np.median([abs(a.correlation) for a in anchors]))
@@ -430,5 +519,11 @@ def estimate_from_audio(
 
 def _unreliable(residual: DriftEstimate) -> DriftEstimate:
     return DriftEstimate(
-        1.0, residual.offset_s, "unreliable", None, residual.anchors, residual.residual_ms
+        1.0,
+        residual.offset_s,
+        "unreliable",
+        None,
+        residual.anchors,
+        residual.residual_ms,
+        periodic=residual.periodic,
     )

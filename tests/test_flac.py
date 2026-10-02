@@ -338,3 +338,47 @@ def test_tagging_library_vendor_is_not_an_encoder() -> None:
     genuine = FlacInfo(stream_info=info, vendor="reference libFLAC 1.4.2 20221022")
     assert genuine.encoder_family == "reference libFLAC"
     assert not genuine.vendor_rewritten
+
+
+@pytest.mark.needs_ffmpeg
+def test_verify_md5_of_a_24_bit_flac(ffmpeg_tools: FFmpegTools, tmp_path: Path) -> None:
+    """md5 muxer s16'ya cevirdigi icin her 24-bit FLAC False cikiyordu (G1)."""
+    import subprocess
+
+    media = tmp_path / "hires.flac"
+    subprocess.run(
+        [
+            str(ffmpeg_tools.ffmpeg),
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "anoisesrc=sample_rate=96000:duration=2",
+            "-ac",
+            "2",
+            "-sample_fmt",
+            "s32",
+            "-c:a",
+            "flac",
+            str(media),
+        ],
+        check=True,
+    )
+    info = flac.scan(media)
+    assert info is not None and info.stream_info.bits_per_sample == 24
+    assert flac.verify_md5(ffmpeg_tools.ffmpeg, media, info.stream_info) is True
+
+
+def test_a_large_cover_does_not_hide_later_blocks(tmp_path: Path) -> None:
+    """Ilk 4 MB okunuyordu; buyuk kapak onde ise vendor kayboluyordu (G4)."""
+    cover = make_block(flac.BLOCK_PICTURE, bytes(5 << 20))
+    comment = make_block(
+        flac.BLOCK_VORBIS_COMMENT, make_vorbis_comment("reference libFLAC 1.4.3", [])
+    )
+    target = tmp_path / "cover.flac"
+    target.write_bytes(make_flac(extra_blocks=[cover, comment]))
+    info = flac.scan(target)
+    assert info is not None
+    assert info.vendor == "reference libFLAC 1.4.3"
+    assert [b.block_type for b in info.blocks][-1] == flac.BLOCK_VORBIS_COMMENT

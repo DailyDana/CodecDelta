@@ -8,6 +8,8 @@ from pathlib import Path
 
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
+    # Baslatici bos argumanlari da gecirir (dosya surulmeden cift tik).
+    args = [a for a in args if a.strip()]
 
     from PyQt6.QtWidgets import QApplication, QMessageBox
 

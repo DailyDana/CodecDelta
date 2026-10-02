@@ -26,11 +26,13 @@ if not exist "%PY%" (
     exit /b 1
 )
 
-cd /d "%ROOT%"
-
 if /i "%~1"=="--console" goto console
 
-start "" "%PYW%" -m app %*
+rem Yollar `cd` ONCESI mutlaga cevrilir: sonra proje klasorune gore cozulup
+rem bulunamiyorlardi (denetim D24).
+call :absolute "%~1" "%~2"
+cd /d "%ROOT%"
+start "" "%PYW%" -m app "%A1%" "%A2%"
 exit /b 0
 
 :console
@@ -38,9 +40,19 @@ rem Parantezli bir blok icinde %%1, blok AYRISTIRILIRKEN genisletilir; shift
 rem henuz calismamis olur ve "--console" dosya adi diye uygulamaya gecerdi.
 rem Bu yuzden etiket + goto.
 shift
-"%PY%" -m app %1 %2
+call :absolute "%~1" "%~2"
+cd /d "%ROOT%"
+"%PY%" -m app "%A1%" "%A2%"
 set "CODE=%ERRORLEVEL%"
 echo.
 echo Uygulama kapandi, cikis kodu %CODE%.
 pause
 exit /b %CODE%
+
+:absolute
+rem Bos arguman bos kalir; uygulama bos argumanlari yok sayar.
+set "A1="
+set "A2="
+if not "%~1"=="" set "A1=%~f1"
+if not "%~2"=="" set "A2=%~f2"
+exit /b 0

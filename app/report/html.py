@@ -44,11 +44,16 @@ class ReportPrivacyError(CodecDeltaError):
 
     def __init__(self, leaks: list[str]) -> None:
         self.leaks = leaks
+        # Ilk birkaci gosterilir: kullanici neyin engellendigini bilmeli (D4).
+        # Ileti yalnizca yerel arayuzde gorunur; rapor zaten yazilmadi.
+        shown = ", ".join(dict.fromkeys(leaks[:3]))
         super().__init__(
             Message(
                 "report.privacy",
-                "The report still contains {count} personal trace(s); it was not written.",
+                "The report still contains {count} personal trace(s) ({shown}); it was not "
+                "written.",
                 count=len(leaks),
+                shown=shown,
             )
         )
 

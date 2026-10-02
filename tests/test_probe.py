@@ -230,3 +230,99 @@ def test_probe_real_file_is_fast(ffmpeg_tools: FFmpegTools, tmp_path: Path) -> N
     assert p.audio[0].sample_rate == 44100
     assert p.audio[0].is_lossless
     assert p.duration is not None and 2.9 < p.duration < 3.1
+
+
+# -- hata turleri (denetim D28, D29, D31) --------------------------------------------
+
+
+def test_errors_survive_pickle_and_copy() -> None:
+    """Ozel `__init__` imzalari pickle/copy'yi kiriyordu (D31)."""
+    import copy
+    import pickle
+
+    from app.core.errors import CancelledError, FFmpegFailedError
+
+    failed = FFmpegFailedError(("C:/bin/ffprobe.exe", "-i", "a.flac"), 1, "boom")
+    again = pickle.loads(pickle.dumps(failed))
+    assert isinstance(again, FFmpegFailedError)
+    assert again.command == failed.command and again.returncode == 1 and again.stderr == "boom"
+    assert str(again) == str(failed)
+    cancelled = copy.copy(CancelledError("analysis"))
+    assert str(cancelled) == "The analysis was cancelled." and cancelled.what == "analysis"
+
+
+def test_a_failure_names_the_tool_and_translates() -> None:
+    """ffprobe hatasi "ffmpeg exited" diye ve Turkce arayuzde Ingilizce gorunuyordu (D28)."""
+    from app.core.errors import FFmpegFailedError
+    from app.ui.i18n import localize, set_language
+
+    failed = FFmpegFailedError(("C:/bin/ffprobe.exe",), 2, "")
+    assert str(failed) == "ffprobe exited with code 2."
+    set_language("tr")
+    try:
+        assert localize(failed.args[0]) == "ffprobe 2 çıkış koduyla sonlandı."  # noqa: RUF001 (Turkce metin)
+    finally:
+        set_language("en")
+
+
+@pytest.mark.needs_ffmpeg
+def test_a_relative_path_starting_with_a_dash_is_a_file(
+    ffmpeg_tools: FFmpegTools, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Basinda "-" olan goreli yol ffprobe'a secenek olarak gidiyordu (D29)."""
+    import subprocess
+
+    target = tmp_path / "-dash.flac"
+    subprocess.run(
+        [
+            str(ffmpeg_tools.ffmpeg),
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=duration=1",
+            "-c:a",
+            "flac",
+            str(target),
+        ],
+        check=True,
+    )
+    monkeypatch.chdir(tmp_path)
+    info = probe(ffmpeg_tools.ffprobe, Path("-dash.flac"))
+    assert info.audio and info.audio[0].codec == "flac"
+
+
+@pytest.mark.needs_ffmpeg
+def test_bit_depth_of_pcm_wav_and_aiff_is_read(ffmpeg_tools: FFmpegTools, tmp_path: Path) -> None:
+    """16-bit WAV/AIFF'te bit derinligi bos kaliyordu: bits_per_raw_sample N/A (D37)."""
+    import subprocess
+
+    for codec, name in (("pcm_s16le", "a.wav"), ("pcm_s16be", "a.aiff"), ("flac", "a.flac")):
+        target = tmp_path / name
+        subprocess.run(
+            [
+                str(ffmpeg_tools.ffmpeg),
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=duration=1",
+                "-c:a",
+                codec,
+                str(target),
+            ],
+            check=True,
+        )
+        assert probe(ffmpeg_tools.ffprobe, target).audio[0].bits_per_raw_sample == 16, name
+
+
+@pytest.mark.needs_ffmpeg
+def test_an_empty_file_is_rejected(ffmpeg_tools: FFmpegTools, tmp_path: Path) -> None:
+    """0 baytlik .flac 0 Hz / 0 kanalli bir izle kabul ediliyordu (D42)."""
+    empty = tmp_path / "empty.flac"
+    empty.write_bytes(b"")
+    with pytest.raises(ProbeError) as caught:
+        probe(ffmpeg_tools.ffprobe, empty)
+    assert getattr(caught.value.args[0], "key", "") == "probe.undecodable"

@@ -239,3 +239,274 @@ def test_end_to_end_transcode_and_clean_file(ffmpeg_tools: FFmpegTools, tmp_path
 
     mp3_verdict = verdict.verify(ffmpeg_tools.ffmpeg, probe(ffmpeg_tools.ffprobe, lossy))
     assert mp3_verdict.bucket == "not_applicable"
+
+
+def _cd_like(seconds: int = SECONDS) -> np.ndarray:
+    """Gercek CD'ye benzer: 12 kHz'ten sonra yumusak dogal inis (~2.7 dB/500 Hz).
+
+    Kare basina kesim bu yuzden 20.5 kHz civarinda kalir; gercek CD'lerde
+    olculen 20.87-21.2 kHz'e yakin.
+    """
+    x = pink(7, seconds)
+    f = freqs_of(x)
+    return shape(x, np.where(f > 12_000, -5.4 * (f - 12_000) / 1000, 0.0))
+
+
+def _flac(ffmpeg: Path, x: np.ndarray, out: Path, rate: int | None = None) -> Path:
+    resample = (
+        ["-af", f"aformat=sample_fmts=dbl,aresample={rate}:resampler=soxr:precision=28:cutoff=0.99"]
+        if rate
+        else []
+    )
+    subprocess.run(
+        [
+            str(ffmpeg),
+            "-v",
+            "error",
+            "-f",
+            "f32le",
+            "-ar",
+            str(RATE),
+            "-ac",
+            "1",
+            "-i",
+            "-",
+            *resample,
+            "-sample_fmt",
+            "s32",
+            "-c:a",
+            "flac",
+            str(out),
+        ],
+        input=x.astype("<f4").tobytes(),
+        check=True,
+    )
+    return out
+
+
+@pytest.mark.needs_ffmpeg
+def test_an_upsampled_cd_is_judged_at_its_source_rate(
+    ffmpeg_tools: FFmpegTools, tmp_path: Path
+) -> None:
+    """44.1'den 96'ya buyutulmus kayit: resampler duvari codec duvari degil (D3).
+
+    Once 22.05 kHz'teki duvar "brickwall" ve ustundeki bosluk "bos taban"
+    sayiliyordu; dosya dogal hizda ne diyorsa buyutulmus hali de onu demeli.
+    """
+    ff = ffmpeg_tools.ffmpeg
+    x = _cd_like()
+    native = _flac(ff, x, tmp_path / "native.flac")
+    upsampled = _flac(ff, x, tmp_path / "up96.flac", rate=96_000)
+    lossy = tmp_path / "lossy.mp3"
+    subprocess.run(
+        [
+            str(ff),
+            "-v",
+            "error",
+            "-i",
+            str(native),
+            "-c:a",
+            "libmp3lame",
+            "-b:a",
+            "128k",
+            str(lossy),
+        ],
+        check=True,
+    )
+    lossy_up = tmp_path / "lossy96.flac"
+    subprocess.run(
+        [
+            str(ff),
+            "-v",
+            "error",
+            "-i",
+            str(lossy),
+            "-af",
+            "aformat=sample_fmts=dbl,aresample=96000:resampler=soxr:precision=28:cutoff=0.99",
+            "-sample_fmt",
+            "s32",
+            "-c:a",
+            "flac",
+            str(lossy_up),
+        ],
+        check=True,
+    )
+
+    def judge(path: Path) -> verdict.Verdict:
+        return verdict.verify(ff, probe(ffmpeg_tools.ffprobe, path))
+
+    base, up = judge(native), judge(upsampled)
+    assert base.bucket != "consistent_lossy", base
+    assert up.bucket == base.bucket, up
+    keys = [getattr(n, "key", "") for n in up.notes]
+    assert "single.upsampled" in keys and "single.rejudged" in keys
+    assert judge(lossy_up).bucket == "consistent_lossy"
+
+
+def test_streamed_evidence_matches_one_block() -> None:
+    """Akisli biriktirici, sinyal parca parca verilince ayni kaniti uretir (D5)."""
+    x = brickwall(pink(3), 16_000)
+    whole = spectral.analyse_samples(x, x * 0.3, RATE)
+    accumulator = spectral._Accumulator(RATE, top_hz=None, stereo=True)
+    for start in range(0, x.size, 10_007):
+        part = x[start : start + 10_007]
+        accumulator.push(part, part * 0.3)
+    parts = accumulator.finish()
+    assert parts.frames == whole.frames
+    for field in ("cutoff_median_hz", "knee_hz", "knee_drop_db", "floor_rel_db", "side_hf_rel_db"):
+        assert getattr(parts, field) == pytest.approx(getattr(whole, field), abs=1e-9), field
+
+
+@pytest.mark.needs_ffmpeg
+def test_verification_memory_does_not_grow_with_the_rate(
+    ffmpeg_tools: FFmpegTools, tmp_path: Path
+) -> None:
+    """192 kHz'lik kesit 705 MB tutuyordu; akisli analizle sabit kalmali (D5)."""
+    import tracemalloc
+
+    path = tmp_path / "hires.flac"
+    subprocess.run(
+        [
+            str(ffmpeg_tools.ffmpeg),
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "anoisesrc=color=pink:sample_rate=192000:duration=40:seed=3",
+            "-ac",
+            "2",
+            "-c:a",
+            "flac",
+            "-sample_fmt",
+            "s32",
+            str(path),
+        ],
+        check=True,
+    )
+    info = probe(ffmpeg_tools.ffprobe, path)
+    tracemalloc.start()
+    try:
+        verdict.verify(ffmpeg_tools.ffmpeg, info)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < 64 * 2**20, peak
+
+
+@pytest.mark.needs_ffmpeg
+def test_a_file_without_a_length_is_judged_on_its_start(
+    ffmpeg_tools: FFmpegTools, tmp_path: Path
+) -> None:
+    """Boruya yazilmis FLAC'ta uzunluk yok; tum dosya bellege aliniyordu (D5)."""
+    path = tmp_path / "piped.flac"
+    with path.open("wb") as out:
+        subprocess.run(
+            [
+                str(ffmpeg_tools.ffmpeg),
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "anoisesrc=color=pink:sample_rate=44100:duration=20:seed=3",
+                "-ac",
+                "2",
+                "-c:a",
+                "flac",
+                "-f",
+                "flac",
+                "-",
+            ],
+            stdout=out,
+            check=True,
+        )
+    info = probe(ffmpeg_tools.ffprobe, path)
+    assert info.duration is None
+    result = verdict.verify(ffmpeg_tools.ffmpeg, info)
+    assert any(getattr(n, "key", "") == "single.unknown_duration" for n in result.notes)
+    assert result.bucket == "consistent_lossless"
+
+
+@pytest.mark.needs_ffmpeg
+def test_a_silent_middle_moves_the_excerpt(ffmpeg_tools: FFmpegTools, tmp_path: Path) -> None:
+    """Orta kesit sessizken hukum "belirsiz" cikiyordu (D13)."""
+    from tests.conftest import silent_middle
+
+    path = silent_middle(ffmpeg_tools.ffmpeg, tmp_path / "gap.flac")
+    result = verdict.verify(ffmpeg_tools.ffmpeg, probe(ffmpeg_tools.ffprobe, path))
+    assert result.bucket == "consistent_lossless", result
+    assert any(getattr(n, "key", "") == "single.moved_excerpt" for n in result.notes)
+
+
+@pytest.mark.parametrize("filter_hz", [21_000.0, 21_500.0])
+def test_an_anti_alias_filter_does_not_hide_a_dark_recording(filter_hz: float) -> None:
+    """Karanlik kayit + dik anti-alias filtresi "kayipli" cikiyordu (D11).
+
+    Diz filtreye oturuyor ve yumusak dogal inis (karsi-kanit) gorunmuyordu.
+    Filtreli hukum filtresizle ayni olmali; filtre yalnizca not.
+    """
+    x = pink(5)
+    f = freqs_of(x)
+    dark = shape(x, np.where(f > 9000, -5.4 * (f - 9000) / 1000, 0.0))
+
+    def bucket(signal: np.ndarray) -> str:
+        reasons, counter, notes = verdict.judge_spectral(analyse(signal))
+        return verdict.combine(reasons, counter, notes)
+
+    filtered = brickwall(dark, filter_hz, floor_db=-110)
+    assert bucket(filtered) == bucket(dark) != "consistent_lossy"
+    evidence = analyse(filtered)
+    assert evidence.antialias_hz == pytest.approx(filter_hz, abs=400)
+    assert evidence.knee_hz < filter_hz - 500
+
+
+@pytest.mark.needs_ffmpeg
+@pytest.mark.parametrize("kbps", [32, 48])
+def test_a_low_bitrate_mp3_wall_below_8_khz_is_found(
+    ffmpeg_tools: FFmpegTools, tmp_path: Path, kbps: int
+) -> None:
+    """Diz aramasi 8 kHz'ten basliyordu; 4-8 kHz duvari gorulmuyordu (D12)."""
+    ff = str(ffmpeg_tools.ffmpeg)
+    clean = tmp_path / "clean.flac"
+    subprocess.run(
+        [
+            ff,
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "anoisesrc=color=pink:sample_rate=44100:duration=20:seed=5,tremolo=f=1.1:d=0.85",
+            "-ac",
+            "2",
+            "-c:a",
+            "flac",
+            str(clean),
+        ],
+        check=True,
+    )
+    lossy = tmp_path / "low.mp3"
+    subprocess.run(
+        [ff, "-v", "error", "-i", str(clean), "-c:a", "libmp3lame", "-b:a", f"{kbps}k", str(lossy)],
+        check=True,
+    )
+    transcode = tmp_path / "low.flac"
+    subprocess.run(
+        [ff, "-v", "error", "-i", str(lossy), "-c:a", "flac", str(transcode)], check=True
+    )
+    result = verdict.verify(ffmpeg_tools.ffmpeg, probe(ffmpeg_tools.ffprobe, transcode))
+    assert result.bucket == "consistent_lossy", result
+    assert result.spectral is not None and result.spectral.knee_hz < 8000
+
+
+def test_a_codec_range_wall_blocks_a_lossless_verdict() -> None:
+    """Kesim Nyquist'e uzansa da 20.75 kHz alti dik duvar "kayipsiz" dedirtmemeli (D36)."""
+    evidence = _evidence(cutoff_median_hz=21_200.0, knee_hz=20_200.0, knee_drop_db=35.0)
+    reasons, counter, notes = verdict.judge_spectral(evidence)
+    assert any("brickwall" in r for r in reasons)
+    assert verdict.combine(reasons, counter, notes) != "consistent_lossless"
+    # Nyquist'e yakin duvar (anti-alias) yine yalnizca not
+    near = _evidence(cutoff_median_hz=21_200.0, knee_hz=21_500.0, knee_drop_db=35.0)
+    reasons, counter, notes = verdict.judge_spectral(near)
+    assert verdict.combine(reasons, counter, notes) == "consistent_lossless"

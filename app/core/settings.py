@@ -113,8 +113,11 @@ def load(path: Path | None = None) -> Settings:
     target = path or settings_file()
     defaults = Settings()
     try:
-        raw = json.loads(target.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        # utf-8-sig: Not Defteri BOM'lu kaydeder ve json BOM'u reddeder; tum
+        # ayarlar sessizce sifirlaniyordu. RecursionError: asiri derin ic ice
+        # bir dosya json'u zorluyordu (denetim D40).
+        raw = json.loads(target.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError, RecursionError):
         return defaults
     if not isinstance(raw, dict):
         return defaults

@@ -24,7 +24,7 @@ from PyQt6.QtWidgets import (
 
 from app.core.errors import CodecDeltaError
 from app.core.probe import Probe, default_stream, probe
-from app.ui.i18n import tr
+from app.ui.i18n import localize, tr
 
 MEDIA_FILTER = (
     "Media (*.flac *.wav *.aif *.aiff *.alac *.m4a *.mp4 *.mp3 *.opus *.ogg *.oga *.webm "
@@ -46,6 +46,9 @@ def _format_label(info: Probe, index: int) -> str:
 
 class FileSlot(QFrame):
     changed = pyqtSignal()
+    # Birden fazla dosya birakildiginda ilkinden sonrakiler (D26): yuvayi
+    # barindiran sekme bunlari baska bir yuvaya verebilir.
+    dropped_more = pyqtSignal(list)
 
     def __init__(self, title: str, ffprobe: Path, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -102,7 +105,10 @@ class FileSlot(QFrame):
             self.info = None
             self._name.setText(path.name)
             self._name.setObjectName("SlotName")
-            self._info.setText(exc.user_message())
+            self._info.setText(localize(exc.args[0]) if exc.args else exc.user_message())
+            # Onceki dosyanin iz listesi kalmasin (D23).
+            self._tracks.clear()
+            self._tracks.hide()
             self._refresh()
             self.changed.emit()
             return
@@ -178,6 +184,8 @@ class FileSlot(QFrame):
         if urls:
             self.set_path(Path(urls[0].toLocalFile()))
             event.acceptProposedAction()
+            if len(urls) > 1:
+                self.dropped_more.emit([Path(u.toLocalFile()) for u in urls[1:]])
 
     def mouseReleaseEvent(self, event: QMouseEvent | None) -> None:
         if event is not None and event.button() == Qt.MouseButton.LeftButton:

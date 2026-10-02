@@ -37,7 +37,8 @@ def ensure_signal(x: np.ndarray, name: str = "signal") -> np.ndarray:
     """
     if x.ndim != 1:
         raise ValueError(f"{name} tek boyutlu olmali, {x.ndim} boyut verildi")
-    if x.size and not bool(np.isfinite(x).all()):
+    # Tamsayi dizide NaN/inf olamaz; kontrol tam boy bir bool dizisi ayirirdi.
+    if x.size and x.dtype.kind in "fc" and not bool(np.isfinite(x).all()):
         raise ValueError(f"{name} sonlu olmayan deger iceriyor (NaN veya inf)")
     return x
 

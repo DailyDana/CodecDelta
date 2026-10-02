@@ -205,3 +205,99 @@ def test_early_break_does_not_hang(ffmpeg_tools: FFmpegTools) -> None:
         for _ in stream.blocks(1024):
             break
     assert time.perf_counter() - start < 20.0
+
+
+# -- bozuk akislar (denetim D35, D39) ------------------------------------------------
+
+
+def test_zero_channels_is_rejected_before_starting() -> None:
+    """channels=0 ile 30 s bekleyip ham TimeoutExpired geliyordu (D39)."""
+    with pytest.raises(ValueError):
+        PcmStream(Path("ffmpeg"), [], sample_rate=44100, channels=0)
+
+
+@pytest.mark.needs_ffmpeg
+def test_a_partial_frame_is_an_error(ffmpeg_tools: FFmpegTools) -> None:
+    """Akis cercevenin ortasinda biterse kalan baytlar sessizce atiliyordu (D39)."""
+    from app.core.errors import UnsupportedInputError
+
+    args = [
+        *("-nostdin", "-v", "error", "-f", "lavfi"),
+        *("-i", "sine=sample_rate=44100:duration=1", "-af", "atrim=end_sample=1001"),
+        *("-ac", "1", "-f", "f32le", "-"),
+    ]
+    # 1001 mono ornek = 4004 bayt; stereo cerceve 8 bayt: son cerceve yarim.
+    stream = PcmStream(ffmpeg_tools.ffmpeg, args, sample_rate=44100, channels=2)
+    with pytest.raises(UnsupportedInputError), stream:
+        for _ in stream.blocks(4096):
+            pass
+
+
+@pytest.mark.needs_ffmpeg
+def test_non_finite_samples_become_silence(ffmpeg_tools: FFmpegTools, tmp_path: Path) -> None:
+    """Float WAV'da tek NaN/inf ornek analizi ham ValueError ile dusuruyordu (D35)."""
+    import subprocess
+
+    from app.core.probe import probe
+    from app.single import verdict
+
+    samples = np.random.default_rng(1).standard_normal((44100 * 20, 2)).astype("<f4") * 0.1
+    samples[1000, 0], samples[5000, 1] = np.nan, np.inf
+    wav = tmp_path / "nan.wav"
+    subprocess.run(
+        [
+            str(ffmpeg_tools.ffmpeg),
+            "-v",
+            "error",
+            "-f",
+            "f32le",
+            "-ar",
+            "44100",
+            "-ac",
+            "2",
+            "-i",
+            "-",
+            "-c:a",
+            "pcm_f32le",
+            str(wav),
+        ],
+        input=samples.tobytes(),
+        check=True,
+    )
+    result = verdict.verify(ffmpeg_tools.ffmpeg, probe(ffmpeg_tools.ffprobe, wav))
+    notes = [n for n in result.notes if getattr(n, "key", "") == "single.nonfinite"]
+    assert notes and notes[0].params["count"] == 2
+
+
+def test_stderr_is_drained_in_chunks_not_bytes() -> None:
+    """readline() tamponsuz boruda bayt bayt okuyordu: 12 MB 8.9 s (D38)."""
+    import io
+
+    from app.core.ffmpeg_runner import StderrCollector
+
+    class Unbuffered(io.RawIOBase):
+        """Tamponsuz boru gibi: her `read` en fazla istenen kadar, tek cagri."""
+
+        def __init__(self, data: bytes) -> None:
+            self._data = memoryview(data)
+            self.calls = 0
+
+        def readable(self) -> bool:
+            return True
+
+        def readinto(self, buffer) -> int:  # type: ignore[no-untyped-def]
+            self.calls += 1
+            n = min(len(buffer), len(self._data))
+            buffer[:n] = self._data[:n]
+            self._data = self._data[n:]
+            return n
+
+    lines = b"".join(b"frame=%07d warning: something\r\n" % i for i in range(300_000))
+    stream = Unbuffered(lines + b"last line without newline")
+    collector = StderrCollector(stream)  # type: ignore[arg-type]
+    collector.join(timeout=60)
+    tail = collector.tail().splitlines()
+    assert tail[-1] == "last line without newline"
+    assert tail[-2] == "frame=0299999 warning: something"
+    # 12 MB'lik akis parca parca okunmali; bayt bayt okuma milyonlarca cagri olurdu.
+    assert stream.calls < 1000

@@ -175,3 +175,12 @@ def test_ladder_places_a_known_bitrate_on_itself(
     assert verdict.by_snr.equivalent_kbps == pytest.approx(96.0, rel=0.15)
     assert verdict.by_nmr.position in ("within", "above", "below")
     assert "kbps" in verdict.headline
+
+
+def test_minus_infinity_has_no_place_on_the_ladder() -> None:
+    """-inf "64k'nin altinda" konumlaniyordu (D10); +inf ise gercekten ustte."""
+    from app.compare.ladder import place
+
+    assert place([10.0, 15.0, 20.0], [64, 96, 128], float("-inf")).position == "unknown"
+    assert place([10.0, 15.0, 20.0], [64, 96, 128], float("inf")).position == "above"
+    assert place([10.0, float("-inf"), 20.0], [64, 96, 128], 12.0).position == "unknown"

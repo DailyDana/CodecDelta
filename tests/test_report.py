@@ -27,6 +27,7 @@ from app.core.messages import Message
 from app.core.probe import probe
 from app.report import html, png, svg_chart
 from app.single import verdict
+from app.ui import present
 from app.ui.i18n import set_language
 
 
@@ -219,3 +220,35 @@ def test_verification_report_shows_the_spectrum_and_evidence(
     assert 'class="for"' in text and "brickwall" in text
     assert "content stops" in text  # grafikteki isaret
     assert html.check_privacy(text) == []
+
+
+@pytest.mark.needs_ffmpeg
+def test_a_partial_measurement_is_flagged(comparison: ComparisonResult) -> None:
+    """Hizasiz kisim disarida birakildiysa baslik uyari tonunda ve sure gorunur (D1)."""
+    partial = dataclasses.replace(comparison, excluded_s=12.0)
+    headline = present.comparison_headline(partial)
+    assert headline.tone == "warn" and "12 s" in headline.detail
+    rows = dict(present.summary_rows(partial))
+    assert any("12 s left out" in value for value in rows.values())
+    set_language("tr")
+    assert "12 s dışarıda" in html.render_comparison(partial)
+
+
+@pytest.mark.needs_ffmpeg
+@pytest.mark.parametrize("name", ["test", "user", "mark"])
+def test_a_common_username_does_not_block_the_report(
+    comparison: ComparisonResult, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, name: str
+) -> None:
+    """`USERNAME=test` iken her rapor reddediliyordu (D4)."""
+    monkeypatch.setenv("USERNAME", name)
+    text = html.render_comparison(comparison)
+    assert html.check_privacy(text) == []
+    assert html.write(tmp_path / "r.html", text).exists()
+
+
+@pytest.mark.needs_ffmpeg
+def test_a_blocked_report_says_what_was_found(comparison: ComparisonResult) -> None:
+    poisoned = dataclasses.replace(comparison, notes=(r"loaded from D:\Private\a.flac",))
+    with pytest.raises(html.ReportPrivacyError) as caught:
+        html.write(Path("unused.html"), html.render_comparison(poisoned))
+    assert r"D:\Private" in caught.value.user_message()

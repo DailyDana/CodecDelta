@@ -50,28 +50,44 @@ _ABS_PATH_RE = re.compile(
 )
 
 
-def _secret_strings() -> list[str]:
-    """Ciktida gorunmemesi gereken makineye ozgu dizeler.
+def _distinct(candidates: Iterable[str]) -> list[str]:
+    """Bos olmayan, en az 3 karakterli, tekrarsiz dizeler; uzundan kisaya.
 
-    Uzundan kisaya siralanir: `C:\\Users\\someone\\AppData` once temizlenmezse
-    geriye `\\AppData` kalir ve kullanici adi zaten gitmis olsa da yol
-    parcalari birbirine karisir.
+    Uzundan kisaya: `C:\\Users\\someone\\AppData` once temizlenmezse geriye
+    `\\AppData` kalir ve yol parcalari birbirine karisir.
     """
-    candidates = [
-        os.environ.get("USERPROFILE", ""),
-        os.environ.get("APPDATA", ""),
-        os.environ.get("LOCALAPPDATA", ""),
-        os.environ.get("TEMP", ""),
-        os.environ.get("TMP", ""),
-        os.environ.get("USERNAME", ""),
-        os.environ.get("COMPUTERNAME", ""),
-    ]
     seen: list[str] = []
     for c in candidates:
         c = c.strip()
         if len(c) >= 3 and c not in seen:
             seen.append(c)
     return sorted(seen, key=len, reverse=True)
+
+
+def _secret_paths() -> list[str]:
+    """Makineye ozgu profil yollari: ayirt edici, her yerde aranir."""
+    names = ("USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP")
+    return _distinct(os.environ.get(n, "") for n in names)
+
+
+def _secret_names() -> list[str]:
+    """Kullanici ve makine adi.
+
+    Bunlar siradan kelimeler olabilir (`test`, `user`, `mark`, `ali`). Alt dize
+    olarak aranirsa raporun kendi metni ("Test" dosyasi, CSS) ya da bir dosya
+    adi her raporu reddettiriyordu (denetim D4). Bu yuzden temizlikte yalnizca
+    butun kelime, denetimde yalnizca yol bileseni olarak aranir: rapor bu
+    adlari yol disinda hic yazmaz.
+    """
+    return _distinct(os.environ.get(n, "") for n in ("USERNAME", "COMPUTERNAME"))
+
+
+def _as_word(name: str) -> re.Pattern[str]:
+    return re.compile(rf"(?<![A-Za-z0-9]){re.escape(name)}(?![A-Za-z0-9])", re.IGNORECASE)
+
+
+def _as_path_component(name: str) -> re.Pattern[str]:
+    return re.compile(r"[\\/]" + re.escape(name) + r"(?=[\\/\s\"'<>|]|$)", re.IGNORECASE)
 
 
 def scrub(text: str, *, extra: Iterable[str] = ()) -> str:
@@ -82,9 +98,11 @@ def scrub(text: str, *, extra: Iterable[str] = ()) -> str:
     etiket icinde) gecti ise ayakta kalirdi.
     """
     out = text
-    for secret in list(extra) + _secret_strings():
+    for secret in [*extra, *_secret_paths()]:
         if secret:
             out = out.replace(secret, "<REDACTED>")
+    for name in _secret_names():
+        out = _as_word(name).sub("<REDACTED>", out)
     return _ABS_PATH_RE.sub(lambda m: Path(m.group(0)).name or "<PATH>", out)
 
 
@@ -146,8 +164,10 @@ def audit(text: str, *, extra: Iterable[str] = ()) -> list[str]:
     hata burada yakalanir.
     """
     found: list[str] = []
-    for secret in list(extra) + _secret_strings():
+    for secret in [*extra, *_secret_paths()]:
         if secret and secret in text:
             found.append(secret)
+    for name in _secret_names():
+        found.extend(m.group(0) for m in _as_path_component(name).finditer(text))
     found.extend(m.group(0) for m in _ABS_PATH_RE.finditer(text))
     return found

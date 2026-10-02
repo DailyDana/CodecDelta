@@ -69,6 +69,14 @@ _MIN_WINDOW_FRAMES = 4096
 # Ilk pencere sessizlige ya da alkisa denk gelirse denenecek diger konumlar
 # (ortusmenin kesri olarak).
 _POSITIONS = (0.5, 0.25, 0.75)
+# Bunlardan hicbiri kullanilabilir bir pencere vermezse denenecek ek konumlar.
+# Ortasi uzun sessiz bir dosyada uc pencere de sessizlige dusuyordu (D8).
+_FALLBACK_POSITIONS = (0.1, 0.9, 0.4, 0.6, 0.0, 1.0)
+# Zarfin bu kadarindan fazlasi sessizlik tabanindaysa pencere okunmaz bile.
+_MAX_SILENT_FRACTION = 0.5
+# Zarf eslesmesi bu gevsek ortusme esigiyle guclu cikiyorsa dosyalar ayni kayit
+# ama az ortusuyor demektir; gerekce buna gore yazilir (hizalanmaz).
+_PARTIAL_OVERLAP_FRACTION = 0.15
 
 # Saat kaymasi izlenecekse ince gecikme bu noktalarin HEPSINDE olculur ve
 # pipeline noktalardan bir dogru gecirir. Surukelenme tahmininin egimi
@@ -126,10 +134,33 @@ class AlignmentPlan:
         return self.verdict == "aligned"
 
 
-def _samples_as_float(env: Envelope) -> np.ndarray | None:
-    if env.samples is None:
-        return None
-    return env.samples.astype(np.float64) / 32767.0
+def _mostly_silent(env: Envelope, start_s: float, length_s: float) -> bool:
+    """Referans zarfinin bu araliginin cogu sessizlik tabaninda mi?
+
+    Zarf degerleri z-skorlu log-enerji; dijital sessizlik ve -80 dB alti
+    `envelope` tabanina kelepcelenir, yani hepsi tam olarak en kucuk degerdedir.
+    Taban medyanin belirgin altinda degilse (dinamigi duz icerik) sessizlik
+    yoktur.
+    """
+    values = env.values
+    if values.size == 0:
+        return False
+    floor = float(values.min())
+    if floor > float(np.median(values)) - 1.0:
+        return False
+    lo = max(0, int(start_s * env.hop_hz))
+    hi = max(lo, int((start_s + length_s) * env.hop_hz))
+    window = values[lo:hi]
+    if window.size == 0:
+        return False
+    return float(np.mean(window <= floor + 1e-3)) > _MAX_SILENT_FRACTION
+
+
+def _is_silent(env: Envelope) -> bool:
+    """Zarf tamamen duz mu (dijital sessizlik ya da bos dosya)?"""
+    if env.samples is not None:
+        return not bool(np.any(env.samples))
+    return env.values.size == 0 or float(np.ptp(env.values)) == 0.0
 
 
 def _window_frames(sample_rate: int, window_s: float, drift: DriftEstimate | None) -> int:
@@ -218,8 +249,10 @@ def build(
         )
 
     # -- surukelenme ---------------------------------------------------------
-    ref_samples = _samples_as_float(reference_env)
-    test_samples = _samples_as_float(test_env)
+    # int16 ornekler OLDUGU GIBI verilir: hiz tahmini olcekten bagimsizdir ve
+    # pencereleri kendisi cevirir. Tam boy float64 kopya 60 dakikalik ciftte
+    # 550 MB tutuyordu (denetim D5).
+    ref_samples, test_samples = reference_env.samples, test_env.samples
     if ref_samples is None or test_samples is None:
         reasons.append(
             Message("plan.no_samples", "speed ratio not measured: envelope kept no samples")
@@ -245,11 +278,53 @@ def build(
                 )
             )
 
+    if drift is not None and drift.periodic:
+        # Sabit ton ya da dongu: her periyotta esit tepe var, hangi gecikmenin
+        # dogru oldugu bilinemez. Devam edilirse L2 rastgele bir periyot katina
+        # hizalar ve olcum anlamsiz olur; zarf da duz oldugu icin "farkli kayit"
+        # denirdi, bu da yanlis (denetim D6).
+        reasons.append(
+            Message(
+                "plan.periodic",
+                "the signal repeats itself (a steady tone or a loop): the delay between the "
+                "files is ambiguous and cannot be measured",
+            )
+        )
+        return result("unaligned")
+
     anchored = drift is not None and drift.status != "unreliable"
 
     # -- "ayni kayit mi" ilk kapi -------------------------------------------
     if envelope.rho < MIN_ENVELOPE_CORRELATION:
         if not anchored:
+            # "Farkli kayit" demeden once iki baska aciklama: dosyalardan biri
+            # sessiz, ya da ayni kayit ama yarisindan azi ortusuyor. Ikisi de
+            # "farkli kayit" diye etiketleniyordu (denetim D34).
+            for env, which in ((reference_env, "reference"), (test_env, "test")):
+                if _is_silent(env):
+                    reasons.append(
+                        Message(
+                            "plan.silent",
+                            "the {which} file is silent: there is nothing to align",
+                            which=which,
+                        )
+                    )
+                    return result("unaligned")
+            partial = coarse_match(
+                reference_env, test_env, min_overlap_fraction=_PARTIAL_OVERLAP_FRACTION
+            )
+            shorter = min(reference_env.frames, test_env.frames)
+            if partial.rho >= MIN_ENVELOPE_CORRELATION and shorter:
+                reasons.append(
+                    Message(
+                        "plan.partial_overlap",
+                        "the files overlap for only {seconds:.0f} s ({percent:.0f}% of the "
+                        "shorter one): too little to align reliably",
+                        seconds=reference_env.seconds(partial.overlap_frames),
+                        percent=100.0 * partial.overlap_frames / shorter,
+                    )
+                )
+                return result("unaligned")
             reasons.append(
                 Message(
                     "plan.different_recording",
@@ -290,12 +365,24 @@ def build(
 
     tracking = drift is not None and drift.needs_tracking
     points: list[_Point] = []
-    for fraction in _TRACK_POSITIONS if tracking else _POSITIONS:
+    positions = list(_TRACK_POSITIONS if tracking else _POSITIONS)
+    extended = tracking
+    index = 0
+    while True:
+        if index == len(positions):
+            if points or extended:
+                break
+            positions.extend(_FALLBACK_POSITIONS)
+            extended = True
+        fraction = positions[index]
+        index += 1
         test_start = int(lo_s * sample_rate) + int((span - frames) * fraction)
         position_s = (test_start + frames / 2) / sample_rate
         coarse = round(coarse_delay_at(position_s) * sample_rate)
         ref_start = test_start - coarse
         if ref_start < 0:
+            continue
+        if _mostly_silent(reference_env, ref_start / sample_rate, frames / sample_rate):
             continue
 
         ref_block = np.asarray(read_reference(ref_start, frames), dtype=np.float64)
@@ -325,7 +412,11 @@ def build(
         points.append(
             _Point(position_s, coarse + lag.lag + fine.delay, lag, fine, ref_block, test_block)
         )
-        if not tracking:
+        # Sabit gecikmede "tamam" bir pencerede dur; "zayif" bir pencereyle
+        # yetinme. Duzenlenmis bir dosyada pencerelerden biri kesime denk gelip
+        # zayif cikabilir; ilk kullanilabilir pencerede durmak tum dosyayi
+        # "farkli master" yapiyordu (denetim D1).
+        if not tracking and fine.status == "ok":
             break
 
     if not points:
@@ -344,7 +435,7 @@ def build(
                 count=len(track),
             )
         )
-    point = best if tracking else points[0]
+    point = best if tracking else next((p for p in points if p.fine.status == "ok"), points[0])
     lag, fine = point.lag, point.fine
     a, b = gccphat.aligned_slices(to_mono(point.ref), to_mono(point.test), lag.lag)
     shifted = fractional_shift(a, fine.delay)

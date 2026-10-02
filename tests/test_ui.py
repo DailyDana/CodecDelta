@@ -323,6 +323,53 @@ def test_cancel_reports_cancelled_not_an_error(ffmpeg_tools, tmp_path: Path) -> 
     assert cancelled and not failures
     assert tab.stage.text() == "Cancelled."
     assert tab.compare_button.isEnabled()
+    # Iptal edilen karsilastirmanin izleri kaydedilmemeli: merdiven ve rapor
+    # onlari onceki sonucla eslestiriyordu (D17).
+    assert tab._last_tracks is None and tab.last_result is None
+    window.close()
+
+
+def test_closing_during_a_job_does_not_hang() -> None:
+    """Kapanista ana is parcacigi `wait()` icinde bloke; is yine de bitmeli (D16).
+
+    `thread.quit` kuyruklu baglantiyla ana is parcacigina gidiyordu ve bloke
+    ana is parcacigi onu hic calistiramiyordu: bekleme zaman asimina kadar
+    (10 s) suruyordu.
+    """
+    _qt_app()
+    from app.ui.worker import Runner
+
+    def job(token, stage):  # type: ignore[no-untyped-def]
+        while not token.cancelled:
+            time.sleep(0.01)
+        return None
+
+    runner = Runner()
+    runner.start(job)
+    time.sleep(0.1)
+    runner.cancel()
+    started = time.perf_counter()
+    assert runner.wait(5000)
+    assert time.perf_counter() - started < 1.0
+
+
+def test_finished_jobs_leave_no_listeners_behind(ffmpeg_tools) -> None:  # type: ignore[no-untyped-def]
+    """Her is failed/cancelled alicisi birakiyordu (15 calistirmada 16 alici, D19)."""
+    app = _qt_app()
+    from app.core.settings import Settings
+    from app.ui.main_window import MainWindow
+
+    window = MainWindow(ffmpeg_tools, Settings(language="en"))
+    tab = window.analyze
+    before = tab.runner.receivers(tab.runner.failed)
+    for _ in range(3):
+        tab._connect_once(lambda result, seconds: None)
+        tab.runner.start(lambda token, stage: None)
+        deadline = time.time() + 10
+        while tab.runner.busy and time.time() < deadline:
+            app.processEvents()
+            time.sleep(0.01)
+    assert tab.runner.receivers(tab.runner.failed) == before
     window.close()
 
 
@@ -428,4 +475,186 @@ def test_encode_then_compare_runs_through_the_window(ffmpeg_tools, tmp_path: Pat
     assert window.analyze.test.path == written
     # Ikinci kodlama ayni adi ezmez
     assert enc.planned_output() == tmp_path / "out" / "src_enc_opus64k_2.opus"
+    window.close()
+
+
+@pytest.mark.needs_ffmpeg
+def test_switching_language_keeps_the_work(ffmpeg_tools, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    """Dil degisince sonuc, iz secimi ve kodlama ayarlari kayboluyordu (D18).
+
+    Meskulken reddedilen degisimde menu yanlis dili isaretli birakiyordu (D20).
+    """
+    app = _qt_app()
+    from app.core.settings import Settings
+    from app.encode.matrix import EncodeSettings
+    from app.ui.main_window import MainWindow
+
+    ff = str(ffmpeg_tools.ffmpeg)
+    reference = tmp_path / "two.mka"
+    noise = "anoisesrc=color=pink:sample_rate=44100:duration=8:seed={s},tremolo=f=1.1:d=0.85"
+    subprocess.run(
+        [
+            ff,
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            noise.format(s=1),
+            "-f",
+            "lavfi",
+            "-i",
+            noise.format(s=2),
+            "-map",
+            "0",
+            "-map",
+            "1",
+            "-ac",
+            "2",
+            "-c:a",
+            "flac",
+            str(reference),
+        ],
+        check=True,
+    )
+    test = tmp_path / "second.opus"
+    subprocess.run(
+        [
+            ff,
+            "-v",
+            "error",
+            "-i",
+            str(reference),
+            "-map",
+            "0:a:1",
+            "-c:a",
+            "libopus",
+            "-b:a",
+            "96k",
+            str(test),
+        ],
+        check=True,
+    )
+    window = MainWindow(ffmpeg_tools, Settings(language="en"))
+    tab = window.analyze
+    tab.load(reference, test)
+    tab.reference.select_stream(1)
+    tab.start_compare()
+    deadline = time.time() + 120
+    while (tab.runner.busy or tab.last_result is None) and time.time() < deadline:
+        app.processEvents()
+        time.sleep(0.02)
+    result = tab.last_result
+    assert result is not None and result.status == "measured"
+
+    window.encode.source.set_path(reference)
+    window.encode.source.select_stream(1)
+    choice = EncodeSettings(codec="mp3", mode="quality", quality=2)
+    window.encode.apply_choice(choice)
+    window.encode.folder.setText(str(tmp_path))
+
+    window.set_language("tr")
+    tab = window.analyze
+    assert tab.reference.stream_index == 1
+    assert tab.last_result is result and tab.results.table.rowCount() == len(result.bands)
+    assert tab.results.ladder_button.isEnabled()
+    assert window.encode.source.stream_index == 1
+    kept = window.encode.choice()
+    assert (kept.codec, kept.mode, kept.quality) == ("mp3", "quality", 2)
+    assert window.encode.folder.text() == str(tmp_path)
+
+    # Mesgulken dil degisimi reddedilir; menu gecerli dili gostermeli.
+    def busy(token, stage):  # type: ignore[no-untyped-def]
+        while not token.cancelled:
+            time.sleep(0.01)
+
+    tab.runner.start(busy)
+    window._language_actions["en"].trigger()
+    assert window.settings.language == "tr"
+    assert window._language_actions["tr"].isChecked()
+    tab.runner.cancel()
+    tab.runner.wait(5000)
+    for _ in range(10):
+        app.processEvents()
+    window.close()
+
+
+@pytest.mark.needs_ffmpeg
+def test_small_interface_fixes(ffmpeg_tools, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    """D21, D22, D23, D25, D26, D27 -- kucuk arayuz duzeltmeleri bir arada."""
+    app = _qt_app()
+    from app.core.settings import Settings
+    from app.ui.main_window import MainWindow
+    from app.ui.tab_encode import Encoded
+
+    ff = str(ffmpeg_tools.ffmpeg)
+    noise = "anoisesrc=color=pink:sample_rate=44100:duration=4:seed={s}"
+    two = tmp_path / "two.mka"
+    subprocess.run(
+        [
+            *(ff, "-v", "error", "-f", "lavfi", "-i", noise.format(s=1)),
+            *("-f", "lavfi", "-i", noise.format(s=2), "-map", "0", "-map", "1"),
+            *("-c:a", "flac", str(two)),
+        ],
+        check=True,
+    )
+    plain = tmp_path / "plain.flac"
+    subprocess.run([ff, "-v", "error", "-i", str(two), "-map", "0:a:0", str(plain)], check=True)
+    broken = tmp_path / "broken.flac"
+    broken.write_bytes(bytes([0x66, 0x4C, 0x61, 0x43, 0, 0]))  # kesik baslik: ffprobe hata verir
+
+    window = MainWindow(ffmpeg_tools, Settings(language="en", output_dir=""))
+    analyze, encode = window.analyze, window.encode
+
+    # D23: probe hatasindan sonra eski iz listesi kalmamali
+    analyze.reference.set_path(two)
+    assert analyze.reference._tracks.count() == 2
+    analyze.reference.set_path(broken)
+    assert analyze.reference.info is None and analyze.reference._tracks.count() == 0
+
+    # D26: birlikte birakilan ikinci dosya diger yuvaya gider
+    analyze.reference.dropped_more.emit([plain])
+    assert analyze.test.path == plain
+
+    # D25: kodlama surerken tum ayarlar kilitli
+    encode.source.set_path(plain)
+    encode._on_busy(True)
+    assert not any(
+        w.isEnabled() for w in (encode.bitrate, encode.quality, encode.advanced, encode.browse)
+    )
+    encode._on_busy(False)
+    assert encode.bitrate.isEnabled()
+
+    # D22: basarisiz/iptal kodlamanin adi rezerve kalmaz, klasor kaydedilmez
+    reserved = tmp_path / "plain_opus128k.opus"
+    encode._taken.add(reserved)
+    encode._pending = Encoded(plain, 0, reserved, False)
+    encode.folder.setText(str(tmp_path / "elsewhere"))
+    encode._on_cancelled()
+    assert reserved not in encode._taken
+    assert encode.settings.output_dir == ""
+
+    # D21: kodlamanin kaydettigi klasor Analiz'e yansir
+    encode.folder.setText(str(tmp_path))
+    encode._remember_folder()
+    assert analyze.settings.output_dir == str(tmp_path)
+
+    # D27: Analiz mesgulken biten kodlama sirada bekler, sonra karsilastirilir
+    def busy(token, stage):  # type: ignore[no-untyped-def]
+        while not token.cancelled:
+            time.sleep(0.01)
+
+    analyze.runner.start(busy)
+    window._on_encoded(Encoded(plain, 0, plain, True))
+    assert window._queued is not None and "plain.flac" in analyze.stage.text()
+    analyze.runner.cancel()
+    deadline = time.time() + 30
+    while window._queued is not None and time.time() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+    assert window._queued is None and analyze.reference.path == plain
+    analyze.runner.cancel()
+    analyze.runner.wait(30000)
+    for _ in range(10):
+        app.processEvents()
     window.close()

@@ -62,6 +62,18 @@ MAX_LOSSY_CUTOFF_HZ = 20_750.0
 # kesim, kayip degil dosyanin dogasidir). Gercek 44.1 kHz min: 0.961.
 MAX_LOSSY_CUTOFF_NYQUIST_FRACTION = 0.95
 
+# Yuksek hizli (> 48 kHz) dosyada icerik bir standart hizin Nyquist'inin bu
+# kesrinin altinda bitiyorsa kanit O hizda yeniden cikarilir: esikler 44.1/48
+# kHz'te olculdu. Ayni CD, 96 kHz'e buyutulunce kesim medyani 20.94'ten 20.70
+# kHz'e iniyordu (bin cozunurlugu) ve 22.05 kHz'teki resampler duvari codec
+# duvari saniliyordu (denetim D3).
+REJUDGE_RATES: tuple[int, ...] = (44_100, 48_000)
+REJUDGE_NYQUIST_FRACTION = 0.97
+# Diz bir standart hizin Nyquist'inin bu kadar yakinindaysa (oran) dosya o
+# hizdan buyutulmus gorunur. Olculen: 44.1'den 96'ya buyutulmus iki CD 1.002
+# ve 1.004.
+UPSAMPLED_KNEE_TOLERANCE = 0.02
+
 # Diz ustu taban bunun altindaysa "dizin ustunde hicbir sey yok".
 # Gercek min -44.4; 16 bit MP3/Opus/Vorbis max -64.1 (kuantalama tabani). Esik
 # ortada. AAC-PNS -24.6'ya kadar cikiyor ve bu kanitin disinda kalir (bilinen

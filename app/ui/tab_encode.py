@@ -72,6 +72,8 @@ def _card(title: str) -> tuple[QFrame, QVBoxLayout]:
 
 class EncodeTab(QWidget):
     encoded = pyqtSignal(object)
+    # Ayarlar (orn. cikti klasoru) kaydedildi; diger sekmeler guncellenmeli (D21).
+    settings_changed = pyqtSignal(object)
 
     def __init__(
         self, tools: FFmpegTools, settings: Settings, parent: QWidget | None = None
@@ -158,11 +160,11 @@ class EncodeTab(QWidget):
         self.folder = QLineEdit(settings.output_dir)
         self.folder.setPlaceholderText(tr("encode.output_placeholder"))
         self.folder.textChanged.connect(lambda _: self._refresh())
-        browse = QPushButton(tr("encode.browse"))
-        browse.clicked.connect(self._browse)
+        self.browse = QPushButton(tr("encode.browse"))
+        self.browse.clicked.connect(self._browse)
         folder_row = QHBoxLayout()
         folder_row.addWidget(self.folder, 1)
-        folder_row.addWidget(browse)
+        folder_row.addWidget(self.browse)
         self.preview = QLabel()
         self.preview.setObjectName("Muted")
         self.compare_after = QCheckBox(tr("encode.compare_after"))
@@ -232,6 +234,27 @@ class EncodeTab(QWidget):
             quality=self.quality.value() if mode == "quality" else None,
             options={key: box.currentData() for key, box in self._option_boxes.items()},
         )
+
+    def apply_choice(self, choice: EncodeSettings) -> None:
+        """Bir secimi geri yukler (dil degisiminde arayuz yeniden kurulurken, D18)."""
+        position = self.codec.findData(choice.codec)
+        if position >= 0:
+            self.codec.setCurrentIndex(position)
+        if choice.mode == "quality":
+            self.mode_quality.setChecked(True)
+        else:
+            self.mode_bitrate.setChecked(True)
+        if choice.bitrate_kbps is not None:
+            position = self.bitrate.findData(choice.bitrate_kbps)
+            if position >= 0:
+                self.bitrate.setCurrentIndex(position)
+        if choice.quality is not None:
+            self.quality.setValue(choice.quality)
+        for key, value in choice.options.items():
+            box = self._option_boxes.get(key)
+            if box is not None and (position := box.findData(value)) >= 0:
+                box.setCurrentIndex(position)
+        self._refresh()
 
     def output_folder(self) -> Path | None:
         text = self.folder.text().strip()
@@ -317,18 +340,67 @@ class EncodeTab(QWidget):
         if folder:
             self.folder.setText(folder)
 
+    def _draft(self, output: Path) -> tuple[jobs.EncodeJob, tuple[str, ...]]:
+        """Kodlama isi, kodlayicinin sinirlarina gore hazirlanmis.
+
+        Kodlayici kaynagi kodlayamiyorsa `EncodeUnsupportedError` (D14).
+        """
+        info = self.source.info
+        assert info is not None
+        choice = self.choice()
+        spec = choice.spec
+        index = self.source.stream_index
+        stream = info.stream(index)
+        job = jobs.EncodeJob(
+            source=info.path,
+            output=output,
+            codec=spec.encoder,
+            bitrate_kbps=choice.bitrate_kbps,
+            stream_index=index,
+            source_rate=stream.sample_rate,
+            extra=matrix.extra_args(choice),
+        )
+        return jobs.prepare(
+            job,
+            jobs.encoder_limits(self.tools.ffmpeg, spec.encoder),
+            channels=stream.channels,
+            channel_layout=stream.channel_layout,
+        )
+
     def _refresh(self) -> None:
-        warnings = matrix.warnings(self.choice())
-        self.warning.setText("\n".join(localize(w) for w in warnings))
-        self.warning.setVisible(bool(warnings))
+        messages = [localize(w) for w in matrix.warnings(self.choice())]
+        blocked = False
+        if self.source.info is not None:
+            try:
+                _, notes = self._draft(Path("draft"))
+                messages += [localize(n) for n in notes]
+            except jobs.EncodeUnsupportedError as exc:
+                messages.append(localize(exc.args[0]))
+                blocked = True
+        self.warning.setText("\n".join(messages))
+        self.warning.setVisible(bool(messages))
         planned = self.planned_output()
         self.preview.setText(f"→ {planned}" if planned is not None else "")
-        self.start_button.setEnabled(not self.runner.busy and planned is not None)
+        self.start_button.setEnabled(not self.runner.busy and planned is not None and not blocked)
 
     def _on_busy(self, busy: bool) -> None:
         self.progress.setVisible(busy)
         self.cancel_button.setVisible(busy)
-        for widget in (self.source, self.codec, self.folder, self.compare_after):
+        # Kodlama surerken TUM ayarlar kilitli: once bit hizi/kalite/gelismis
+        # secenekler acik kaliyor, degistirilince onizleme isle uyusmuyordu (D25).
+        for widget in (
+            self.source,
+            self.codec,
+            self.mode_bitrate,
+            self.mode_quality,
+            self.bitrate,
+            self.quality,
+            self.advanced_toggle,
+            self.advanced,
+            self.folder,
+            self.browse,
+            self.compare_after,
+        ):
             widget.setEnabled(not busy)
         self._refresh()
 
@@ -355,16 +427,12 @@ class EncodeTab(QWidget):
             suffix=self.settings.output_suffix,
             taken=self._taken,
         )
-        self._remember_folder()
-        job = jobs.EncodeJob(
-            source=info.path,
-            output=output,
-            codec=spec.encoder,
-            bitrate_kbps=choice.bitrate_kbps,
-            stream_index=stream_index,
-            source_rate=info.stream(stream_index).sample_rate,
-            extra=matrix.extra_args(choice),
-        )
+        try:
+            job, _ = self._draft(output)
+        except jobs.EncodeUnsupportedError as exc:
+            QMessageBox.critical(self, tr("error.encode"), localize(exc.args[0]))
+            self._taken.discard(output)
+            return
         duration = info.stream(stream_index).duration or info.duration
         self._pending = Encoded(info.path, stream_index, output, self.compare_after.isChecked())
         ffmpeg = self.tools.ffmpeg
@@ -387,20 +455,33 @@ class EncodeTab(QWidget):
         if folder != self.settings.output_dir:
             self.settings = Settings(**{**self.settings.__dict__, "output_dir": folder}).clamped()
             settings_mod.save(self.settings)
+            self.settings_changed.emit(self.settings)
 
     def _on_done(self, output: object, seconds: float) -> None:
         assert isinstance(output, Path)
         self.stage.setText(tr("encode.done", name=output.name, seconds=seconds))
         pending, self._pending = self._pending, None
+        # Klasor yalnizca basarili bir kodlamadan sonra hatirlanir (D22).
+        self._remember_folder()
         self._refresh()
         if pending is not None:
             self.encoded.emit(pending)
 
-    def _on_failed(self, message: str) -> None:
+    def _release(self) -> None:
+        """Basarisiz/iptal edilen kodlamanin ad rezervasyonunu birakir (D22).
+
+        Rezerve kalan ad bir sonraki denemeyi gereksiz yere `_2` yapiyordu.
+        """
+        if self._pending is not None:
+            self._taken.discard(self._pending.output)
         self._pending = None
+        self._refresh()
+
+    def _on_failed(self, message: str) -> None:
+        self._release()
         self.stage.setText("")
         QMessageBox.critical(self, tr("error.encode"), message)
 
     def _on_cancelled(self) -> None:
-        self._pending = None
+        self._release()
         self.stage.setText(tr("stage.cancelled"))

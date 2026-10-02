@@ -120,3 +120,22 @@ def test_constant_delay_needs_no_tracking() -> None:
         track=((1.0, 41.25),),
     )
     assert tracking.from_plan(alignment, 44100) == DelayModel(41.25)
+
+
+def test_an_overlap_shorter_than_a_window_keeps_the_model() -> None:
+    """Kisa klipte negatif pencere baslangici `ValueError` firlatiyordu (D9)."""
+    rate = 8000
+    signal = analytic(np.arange(rate // 2, dtype=np.float64) * 0.4)
+    loose = _reader(signal)
+
+    def strict(start: int, count: int) -> np.ndarray:
+        # `FFmpegWindowReader` sozlesmesi: negatif baslangic hatadir.
+        if start < 0 or count < 0:
+            raise ValueError("start ve count negatif olamaz")
+        return loose(start, count)
+
+    # Test referanstan onde (negatif gecikme): referans penceresi pozitif kalirken
+    # test baslangici negatife dusuyordu.
+    start = DelayModel(intercept=-2000.0, slope=-200e-6)
+    refined = tracking.refine_model(start, strict, strict, rate, (100, 3000))
+    assert refined == start

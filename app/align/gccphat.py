@@ -159,6 +159,59 @@ def estimate(
     )
 
 
+def ambiguity(reference: np.ndarray, test: np.ndarray) -> float:
+    """Gecikmenin ne kadar belirsiz oldugu (0..1); periyodik sinyalde ~1.
+
+    Periyodik sinyalde (sabit ton, dongu) her periyotta esit tepe olur:
+    bulunan gecikme periyodun herhangi bir kati olabilir. Olcut, ana tepenin
+    lobu disindaki en yuksek tepenin ana tepeye orani; HEM PHAT HEM duz
+    korelasyonda hesaplanir ve kucugu alinir. Tek basina ikisi de yetmiyor
+    (kabul edilen capalarin medyani, olculen):
+
+    - PHAT: muzik 0.12-0.21, sinus/iki ton 0.98-1.0; ama bandi daraltilmis
+      sinyalde beyazlatma bos bantlari birim genlige cikarip rastgele tepeler
+      uretiyor (agir EQ'lu gurultu 0.86).
+    - Duz: agir EQ 0.24, sinus 1.0; ama muzikte bas notalari korelasyonu
+      periyodiklestiriyor (0.50-0.98).
+
+    Gercekten periyodik bir sinyal ikisinde de yuksektir.
+    """
+    ensure_signal(reference, "reference")
+    ensure_signal(test, "test")
+    n = next_fast_len(reference.size + test.size)
+    cross = np.conj(np.fft.rfft(reference, n)) * np.fft.rfft(test, n)
+    magnitude = np.abs(cross)
+    peak = float(magnitude.max()) if magnitude.size else 0.0
+    if peak <= 0.0:
+        return 0.0
+    plain = np.fft.irfft(cross, n)
+    whitened = np.fft.irfft(cross / np.maximum(magnitude, _PHAT_FLOOR * peak), n)
+    return min(_lobe_ratio(np.abs(plain)), _lobe_ratio(np.abs(whitened)))
+
+
+def _lobe_ratio(magnitude: np.ndarray) -> float:
+    """Ana tepenin lobu disindaki en yuksek deger / ana tepe.
+
+    Lob, tepeden iki yana genlik azaldigi surece uzanir: bandi dar bir
+    sinyalde ana lob genistir ve kendi yamaci ikinci tepe sayilmamali.
+    Dizi daireseldir; tepe ortaya alinir ki lob kenardan sarmasin.
+    """
+    peak_index = int(np.argmax(magnitude))
+    peak = float(magnitude[peak_index])
+    if peak <= 0.0:
+        return 0.0
+    centred = np.roll(magnitude, magnitude.size // 2 - peak_index)
+    middle = centred.size // 2
+    low = middle
+    while low > 0 and centred[low - 1] <= centred[low]:
+        low -= 1
+    high = middle
+    while high < centred.size - 1 and centred[high + 1] <= centred[high]:
+        high += 1
+    rest = np.concatenate([centred[:low], centred[high + 1 :]])
+    return float(rest.max()) / peak if rest.size else 0.0
+
+
 def _peak_to_sidelobe(magnitude: np.ndarray, peak_index: int, exclude: int) -> float:
     """Tepe / yan lob medyani.
 

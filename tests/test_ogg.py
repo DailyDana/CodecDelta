@@ -199,3 +199,28 @@ def test_scan_packets_samples_large_file(tmp_path: Path) -> None:
     assert stats.sampled is True
     assert packets  # ornek bolgelerden paket cikmis olmali
     assert stats.bytes_read <= path.stat().st_size
+
+
+# -- coklu akis ve yetim kuyruk (denetim G2, G3) ------------------------------------
+
+
+def test_other_streams_do_not_leak_into_packets_or_granule() -> None:
+    """Son sayfanin granule'u hangi akistan olursa olsun okunuyordu (G2)."""
+    data = (
+        make_page([b"first"], granule=960, serial=1, sequence=0)
+        + make_page([b"other"], granule=999_999, serial=2, sequence=0)
+        + make_page([b"second"], granule=1920, serial=1, sequence=1)
+        + make_page([b"later"], granule=5_000_000, serial=2, sequence=1)
+    )
+    stats = ogg.ScanStats()
+    packets = list(ogg.iter_packets(ogg.iter_pages(data), stats))
+    assert packets == [b"first", b"second"]
+    assert stats.last_granule == 1920 and stats.chained
+
+
+def test_an_orphan_tail_is_not_glued_to_the_next_packet() -> None:
+    """Yarim paketle biten sayfadan sonra "devam" demeyen sayfa: kuyruk atilir (G3)."""
+    tail = make_page([], segments=bytes([255]), body=b"x" * 255, granule=(1 << 64) - 1, serial=1)
+    fresh = make_page([b"fresh"], granule=960, serial=1, sequence=2)
+    packets = list(ogg.iter_packets(ogg.iter_pages(tail + fresh)))
+    assert packets == [b"fresh"]

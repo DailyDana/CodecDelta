@@ -205,3 +205,47 @@ def test_urls_are_not_paths() -> None:
     assert privacy.scrub(text) == text
     assert privacy.audit(r"but C:\Music\a.flac is") != []
     assert privacy.audit("and (D:/x/y.flac) too") != []
+
+
+@pytest.mark.parametrize("name", ["test", "user", "mark", "ali", "Test"])
+def test_a_common_username_does_not_block_every_report(
+    monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    """Siradan kelime olan kullanici adi alt dize olarak aranmamali (D4).
+
+    Once `USERNAME=test` iken raporun kendi "Test" karti ve `test.flac` gibi
+    bir dosya adi her raporu reddettiriyordu.
+    """
+    monkeypatch.setenv("USERNAME", name)
+    monkeypatch.setenv("USERPROFILE", rf"C:\Users\{name}")
+    text = "Reference ref.flac · Test test.flac · user-select: none; remarkable · alignment"
+    assert privacy.audit(text) == []
+    # ... ama yolun bir parcasi olarak hala yakalanir, mutlak olmasa bile
+    assert privacy.audit(rf"from Users\{name}\Music") != []
+    assert privacy.audit(rf"C:\Users\{name}\Music\a.flac") != []
+
+
+def test_scrub_keeps_words_that_only_contain_the_username(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("USERNAME", "ali")
+    out = privacy.scrub("alignment by ali, Ali and ALI")
+    assert out.startswith("alignment by <REDACTED>")
+    assert "ali" not in out.lower().replace("alignment", "")
+
+
+def test_settings_with_a_bom_are_read(tmp_path: Path) -> None:
+    """Not Defteri BOM'lu kaydeder; tum ayarlar sessizce sifirlaniyordu (D40)."""
+    import codecs
+
+    target = tmp_path / "settings.json"
+    target.write_bytes(codecs.BOM_UTF8 + b'{"language": "tr", "output_dir": "D:/out"}')
+    loaded = load(target)
+    assert loaded.language == "tr" and loaded.output_dir == "D:/out"
+
+
+def test_absurdly_nested_settings_fall_back_to_defaults(tmp_path: Path) -> None:
+    """Asiri derin JSON RecursionError firlatiyordu (D40)."""
+    target = tmp_path / "settings.json"
+    target.write_text("[" * 100_000 + "]" * 100_000, encoding="utf-8")
+    assert load(target) == Settings()

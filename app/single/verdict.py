@@ -38,6 +38,11 @@ Bucket = Literal["consistent_lossless", "consistent_lossy", "undetermined", "not
 DEFAULT_EXCERPT_S = 30.0
 # Bas ve son bu kesir kadar atlanir (fade, alkis, gizli parca).
 _SKIP_EDGE_FRACTION = 0.05
+# Suresi bilinmeyen dosyada bastan okunan sure (s).
+_UNKNOWN_DURATION_SPAN_S = 60.0
+# Kesit konumlari, tercih sirasiyla (kenarlar atildiktan sonra kalan araliga
+# gore kesir). Ilki ortasi: onceki davranis.
+_EXCERPT_FRACTIONS = (0.5, 0.25, 0.75, 0.0, 1.0)
 # Bunun altindaki FLAC blok boyu olagan bir kodlayicidan gelmez (bkz. judge_container).
 _UNUSUAL_BLOCKSIZE = 256
 
@@ -93,6 +98,13 @@ def judge_spectral(evidence: SpectralEvidence) -> tuple[list[str], list[str], li
     # 23.7 kHz'de 60-80 dB, gercek CD 21.1-21.2 kHz'de 17-24 dB. Codec dizleri
     # en fazla 20.9 kHz (Vorbis, 44.1'de 0.948 Nyquist).
     wall_near_nyquist = wall and knee_hz >= thresholds.MAX_LOSSY_CUTOFF_NYQUIST_FRACTION * nyquist
+    # Analiz, Nyquist'e yakin anti-alias duvarini ayri tutar ve dizi onun altinda
+    # arar (bkz. `SpectralEvidence.antialias_hz`).
+    antialias = not math.isnan(evidence.antialias_hz)
+    if antialias:
+        wall_hz, wall_drop = evidence.antialias_hz, evidence.antialias_drop_db
+    else:
+        wall_hz, wall_drop = knee_hz, drop
 
     if not low_cutoff:
         # Ana kapi: icerik Nyquist'e kadar. Olculen hicbir seffaf-olmayan codec
@@ -104,16 +116,33 @@ def judge_spectral(evidence: SpectralEvidence) -> tuple[list[str], list[str], li
                 khz=cutoff / 1000,
             )
         )
-        if wall:
+        codec_range_wall = (
+            wall and not wall_near_nyquist and knee_hz < thresholds.MAX_LOSSY_CUTOFF_HZ
+        )
+        if codec_range_wall:
+            # Kare basina kesim Nyquist'e uzansa da uzun donem spektrumda codec
+            # araliginda (< 20.75 kHz) dik bir duvar var: dusuk bit hizli Opus
+            # bir parcada "kayipsiz" cikiyordu (denetim D36). Duvar kanit
+            # sayilir; tam bant karsi-kanitiyla birlikte hukum "belirsiz" olur.
+            reasons.append(
+                Message(
+                    "single.brickwall",
+                    "brickwall at {khz:.1f} kHz: {drop:.0f} dB drop within 500 Hz "
+                    "(natural roll-off measured at 4-10 dB)",
+                    khz=knee_hz / 1000,
+                    drop=drop,
+                )
+            )
+        elif wall or antialias:
             notes.append(
                 Message(
                     "single.antialias_note",
                     "steep filter at {khz:.1f} kHz ({drop:.0f} dB within 500 Hz, {pct:.0f}% of "
                     "Nyquist): typical of the recording's anti-alias or sample-rate "
                     "conversion filter",
-                    khz=knee_hz / 1000,
-                    drop=drop,
-                    pct=100 * knee_hz / nyquist,
+                    khz=wall_hz / 1000,
+                    drop=wall_drop,
+                    pct=100 * wall_hz / nyquist,
                 )
             )
         return reasons, counter, notes
@@ -146,6 +175,16 @@ def judge_spectral(evidence: SpectralEvidence) -> tuple[list[str], list[str], li
             )
         )
 
+    if antialias:
+        notes.append(
+            Message(
+                "single.antialias_low",
+                "steep filter at {khz:.1f} kHz is at {pct:.0f}% of Nyquist: an anti-alias "
+                "filter, not evidence",
+                khz=wall_hz / 1000,
+                pct=100 * wall_hz / nyquist,
+            )
+        )
     if wall and not wall_near_nyquist:
         reasons.append(
             Message(
@@ -273,6 +312,39 @@ def combine(reasons: list[str], counter: list[str], notes: list[str]) -> Bucket:
     return "undetermined"
 
 
+def _rejudge_rate(evidence: SpectralEvidence) -> int | None:
+    """Yuksek hizli dosyanin yargilanacagi standart hiz, ya da None.
+
+    Duvar bir standart hizin Nyquist'indeyse dosya o hizdan buyutulmustur ve
+    o hizda yargilanir. Degilse ve icerik 48 kHz'e sigiyorsa 48 kHz: 44.1'e
+    indirmek 48 kHz kaynakli uc kayipli dosyayi "belirsiz"e cekti (olculen,
+    D:/music 231 dosya).
+    """
+    # Esikler 44.1 ve 48 kHz'te olculdu; bu hizlarda dosya oldugu gibi yargilanir.
+    widest = max(thresholds.REJUDGE_RATES)
+    if evidence.frames < thresholds.MIN_ACTIVE_FRAMES or evidence.sample_rate <= widest:
+        return None
+    source = _upsampled_from(evidence)
+    if source is not None:
+        return source
+    if evidence.cutoff_median_hz < thresholds.REJUDGE_NYQUIST_FRACTION * widest / 2:
+        return widest
+    return None
+
+
+def _upsampled_from(evidence: SpectralEvidence) -> int | None:
+    """Diz bir standart hizin Nyquist'indeki dik duvarsa o hiz."""
+    drop = evidence.knee_drop_db
+    if math.isnan(drop) or drop <= thresholds.BRICKWALL_DROP_DB:
+        return None
+    for rate in thresholds.REJUDGE_RATES:
+        if rate < evidence.sample_rate and (
+            abs(evidence.knee_hz / (rate / 2) - 1.0) <= thresholds.UPSAMPLED_KNEE_TOLERANCE
+        ):
+            return rate
+    return None
+
+
 def verify(
     ffmpeg: Path,
     info: Probe,
@@ -284,24 +356,100 @@ def verify(
     """Tek dosyayi dogrular. Dosya kayipli formattaysa `not_applicable`."""
     stream = info.stream(stream_index)
     if not stream.is_lossless:
-        return Verdict("not_applicable", (), (), (f"codec {stream.codec} is lossy by design",))
+        note = Message(
+            "single.lossy_format", "codec {codec} is lossy by design", codec=stream.codec
+        )
+        return Verdict("not_applicable", (), (), (note,))
 
-    start: float | None = None
+    starts: list[float | None] = [None]
     duration: float | None = None
-    if info.duration is not None and info.duration > excerpt_s / (1.0 - 2 * _SKIP_EDGE_FRACTION):
-        start = max(_SKIP_EDGE_FRACTION * info.duration, info.duration / 2.0 - excerpt_s / 2.0)
+    span_notes: list[str] = []
+    if info.duration is None:
+        # Baslikta uzunluk yok (boruya yazilmis FLAC): orta kesit bulunamaz.
+        # Bastan sinirli bir sure okunur; analiz akisli oldugu icin bellek icin
+        # degil SURE icin (once tum dosya bellege aliniyordu: 96 kHz'te dakikada
+        # ~700 MB, denetim D5).
+        duration = _UNKNOWN_DURATION_SPAN_S
+        span_notes.append(
+            Message(
+                "single.unknown_duration",
+                "the file does not state its length: judged on the first {seconds:.0f} s",
+                seconds=duration,
+            )
+        )
+        starts = [None, duration, 2 * duration]
+    elif info.duration > excerpt_s / (1.0 - 2 * _SKIP_EDGE_FRACTION):
+        lo = _SKIP_EDGE_FRACTION * info.duration
+        hi = info.duration - lo - excerpt_s
+        starts = [lo + f * (hi - lo) for f in _EXCERPT_FRACTIONS]
         duration = excerpt_s
-    evidence = spectral.analyse(
-        ffmpeg,
-        info.path,
-        sample_rate=stream.sample_rate,
-        channels=stream.channels,
-        stream_index=stream_index,
-        start=start,
-        duration=duration,
-        cancel=cancel,
-    )
+
+    def analyse(rate: int | None = None) -> SpectralEvidence:
+        return spectral.analyse(
+            ffmpeg,
+            info.path,
+            sample_rate=stream.sample_rate,
+            channels=stream.channels,
+            stream_index=stream_index,
+            start=start,
+            duration=duration,
+            rate=rate,
+            cancel=cancel,
+        )
+
+    # Kesit sessizse (gizli parca, uzun sessiz giris, ortasi sessiz kayit)
+    # hukum "belirsiz" cikiyordu (denetim D13): baska konumlar denenir.
+    start = starts[0]
+    evidence = analyse()
+    for candidate in starts[1:]:
+        if evidence.frames >= thresholds.MIN_ACTIVE_FRAMES:
+            break
+        start = candidate
+        evidence = analyse()
+    if start != starts[0] and start is not None:
+        span_notes.append(
+            Message(
+                "single.moved_excerpt",
+                "the usual excerpt is silent: judged on {start:.0f}-{end:.0f} s",
+                start=start,
+                end=start + (duration or 0.0),
+            )
+        )
+    rate_notes: list[str] = []
+    rejudge = _rejudge_rate(evidence)
+    if rejudge is not None:
+        source = _upsampled_from(evidence)
+        if source is not None:
+            rate_notes.append(
+                Message(
+                    "single.upsampled",
+                    "steep wall at {khz:.1f} kHz, the Nyquist of {rate:g} kHz: the file appears "
+                    "upsampled from {rate:g} kHz",
+                    khz=evidence.knee_hz / 1000,
+                    rate=source / 1000,
+                )
+            )
+        rate_notes.append(
+            Message(
+                "single.rejudged",
+                "no content above {khz:.1f} kHz in a {file:g} kHz file: judged at {rate:g} kHz",
+                khz=evidence.cutoff_median_hz / 1000,
+                file=stream.sample_rate / 1000,
+                rate=rejudge / 1000,
+            )
+        )
+        evidence = analyse(rejudge)
     reasons, counter, notes = judge_spectral(evidence)
+    if evidence.nonfinite_samples:
+        notes.append(
+            Message(
+                "single.nonfinite",
+                "{count} samples were not finite numbers (NaN or infinity) and were treated as "
+                "silence",
+                count=evidence.nonfinite_samples,
+            )
+        )
+    notes = span_notes + rate_notes + notes
     flac_info = flac_bitstream.scan(info.path) if stream.codec == "flac" else None
     notes += judge_container(info, flac_info)
     bucket = combine(reasons, counter, notes)

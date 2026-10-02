@@ -789,3 +789,114 @@ bilmiyor.
   sarti eklendi.
 - Grafikte gorunmeyen seri lejantta da yok (taban cogu zaman 90-150 dB,
   gorunur araligin disinda; degeri tabloda).
+
+## Denetim duzeltmeleri (Eylul 2026)
+
+Bulgular ve durumlari: `docs/AUDIT-2026-09.md`.
+
+- **D1 -- blok kapisi.** Plan gecikmeyi birkac pencereden olcuyor ve dosyanin
+  geri kalaninin ayni gecikmeyle hizali oldugunu varsayiyordu; duzenlenmis bir
+  dosyada hizasiz bolum codec gurultusu diye olculuyordu. Ana gecis artik 1 s'lik
+  bloklarin her birinde mid capraz spektrumunun PHAT tepesine bakiyor: tepe
+  sifirdan +-2 ornekten uzaksa blok olcume girmiyor. Korelasyon degil tepe
+  KONUMU: hizali ama gurultulu blok (sessiz pasaj, dusuk bitrate) dusuk
+  korelasyon verir, atilsaydi S/N oldugundan iyi gorunurdu.
+- Kesimin ustune dusen blok yari hizali ve tepe yine sifirda cikiyor; birkac
+  saniyelik ilgisiz ses bile manseti bozuyordu (2 s'lik bloklarla 12.05 yerine
+  6.94 dB). Hizasiz her bolgenin iki yanindaki birer blok da atiliyor.
+- Bloklarin yarisindan azi tutulursa sonuc olculmemis sayiliyor: plan gecikmesi
+  dosyanin cogunluguna ait degil, "kalan kisim" okuyucuyu yaniltir.
+- Plan sabit gecikmede ilk kullanilabilir pencerede degil ilk "tamam" pencerede
+  duruyor; kesime denk gelen pencere tum dosyayi "farkli master" yapiyordu.
+- Olculen: sentetik (gercek 12.05 dB) son 13 s farkli 12.08, 45-47 s kesik
+  muzik 21.95 (gercek 21.69). Gercek Loreena cifti degismedi (25.62 dB).
+- **D2 -- cok kanalli mid.** Mid artik tum kanallarin ortalamasi (stereo'da
+  yine (L+R)/2), side on sol - on sag. Plan hizalamayi zaten tum kanallarin
+  ortalamasiyla yapiyordu; olcum ilk iki kanali aliyordu ve yalnizca merkezde
+  icerigi olan 5.1 dosya S/N -inf veriyordu. Kanal basina ayri olcum daha
+  dogru olurdu ama sonuc modelini ve raporu degistirir; simdilik yapilmadi ve
+  rapora hangi kanalin olculdugunu soyleyen bir not dusuluyor. Dogrulama:
+  merkez-yalniz AC-3 448k 50.42 dB; ayni merkez kanali mono cikarilip
+  karsilastirilinca da 50.42 dB.
+- **D3 -- buyutulmus dosya kaynak hizinda yargilanir.** 48 kHz'in ustundeki
+  dosyada icerik standart bir hizin Nyquist'ine sigiyorsa kanit o hizda yeniden
+  cikariliyor: duvar 22.05/24 kHz'teyse o hiz ("buyutulmus gorunuyor" notuyla),
+  degilse 48 kHz. Esikler 44.1/48 kHz'te olculdu; 96 kHz'te kesim medyani bin
+  cozunurlugu yuzunden ~240 Hz dusuyor ve 22.05 kHz'teki resampler duvari codec
+  duvari saniliyordu. Yeniden orneklenmis analizde diz, taban ve kesim soxr gecis
+  bandinin altinda (0.985 Nyquist) araniyor; aksi halde kendi resampler'imizin
+  duvari gercek dizi golgeliyordu. Dogrulama (D:/music, 231 dosya, 21 gercek):
+  96 kHz'e buyutulmus her dosya dogal hizdaki hukmunu aliyor (21/21 gercek
+  kayipsiz); 88.2/176.4/192 kHz'te 7 dosyalik ornek ayni.
+- **D6 -- periyodik sinyal.** Sabit tonda her periyotta esit tepe var ve
+  capalar rastgele periyot katlarini seciyordu: 1 kHz sinus +3004 ppm, 440 Hz
+  "NTSC pulldown". Capa basina bir belirsizlik olculuyor (ana tepenin lobu
+  disindaki en yuksek tepe / ana tepe) ve medyan 0.5'i asarsa hiz olcumu
+  guvenilmez, plan "sinyal kendini tekrar ediyor, gecikme belirsiz" diyor.
+  Karar PAL/NTSC hipotez yarisindan ONCE, dogal (1.0) hipotezin capalariyla
+  veriliyor: olceklenmis periyodik sinyal sahte bir dogru uretebiliyordu.
+- Olcut PHAT ve duz korelasyonun KUCUGU. PHAT tek basina bandi daraltilmis
+  sinyalde bos bantlari beyazlatip rastgele tepe uretiyor (agir EQ 0.86); duz
+  korelasyon tek basina muzigi bas notalari yuzunden periyodik gosteriyor
+  (0.50-0.98). Maskeli PHAT denendi ve muzigi de belirsiz gosterdi (yalnizca
+  baskin bas binleri kaliyor). Olculen medyanlar: sinus/iki ton ~1.0; 5 gercek
+  parca ve sentetik muzik <= 0.21; agir EQ 0.24. 21 parcanin 42 gercek cifti
+  hizalandi, hicbiri periyodik sayilmadi.
+- Bilinen dar marj: bin merkezine dusmeyen bir ton cok dusuk (-60 dB) bagimsiz
+  gurultuyle tek pencerede 0.58 veriyor; karar medyana bakiyor ve esigin
+  ustunde kaliyor ama marj dar.
+- **D4 -- kullanici adi yol bileseni olarak aranir.** Profil yollari
+  (USERPROFILE, APPDATA, TEMP...) ayirt edici oldugu icin her yerde alt dize
+  olarak aranmaya devam ediyor. Kullanici ve makine adi ise siradan kelime
+  olabiliyor (`test`, `user`, `mark`): denetim onlari yalnizca `\` ya da `/`
+  ardindaki yol bileseni olarak sayiyor, temizlik butun kelime olarak siliyor.
+  Rapor bu adlari yol disinda hic yazmiyor; mutlak yollar zaten ayri desenle
+  yakalaniyor. Engellenen raporun iletisi ilk uc izi gosteriyor.
+- **D5 -- bellek.** Karsilastirmanin tepe calisma kumesi 15 dk'da 504 -> 158 MB,
+  60 dk'da 1.9 GB -> 267 MB. Dogrusal kalan tek kalem planin kabul ettigi int16
+  8 kHz zarf ornekleri (iki dosya, dakikada 1.9 MB). Yapilanlar: zarf akisli
+  hesaplaniyor (tum PCM float64'e cevrilmiyor); hiz tahmini int16 ornekleri
+  pencere pencere float'a ceviriyor ve PAL hipotezi telafisini yalnizca okunan
+  pencerede yapiyor (tam boy yeniden orneklenmis kopya yok); zarf korelasyonu
+  64k'lik gecikme bloklarinda. Sonuclar degismedi (4 cift, 4 ondalik).
+- Referanssiz dogrulama da akisli: kanit yalnizca uzun donem ortalamalar ve
+  kare basina kesim istiyor. 30 s kesit 44.1/96/192 kHz'te 163/353/705 MB'tan
+  7 MB'a indi; 40 dosyada kanit degerleri 3e-14 icinde ayni. Uzunlugunu
+  belirtmeyen dosyada (boruya yazilmis FLAC) tum dosya bellege aliniyordu;
+  artik bastan 60 s okunuyor ve bu not ediliyor.
+- **D7, D13 -- sessiz kesit.** Olcum tabani ve referanssiz dogrulama 30 s'lik
+  bir kesit kullaniyor ve kesit hep ortadan aliniyordu; ortasi sessiz bir
+  kayitta taban NaN (manset NaN) ve dogrulama "belirsiz" cikiyordu. Kesit
+  kullanilamazsa sirayla ceyrekler ve kenarlara yakin konumlar deneniyor; ek
+  maliyet yalnizca sessiz durumda. Dogrulamada kesit kaydirildiysa not dusuluyor.
+- **D8 -- sessiz pencere okunmaz.** Plan L2 penceresini okumadan once referans
+  zarfina bakiyor: araligin yarisindan fazlasi sessizlik tabanindaysa (dijital
+  sessizlik ve -80 dB alti zarfta tam olarak en kucuk degerdedir) pencere
+  atlaniyor. Uc temel konum kullanilabilir pencere vermezse alti ek konum
+  deneniyor; zayif ama kullanilabilir sonucta (farkli master) ek konuma
+  gecilmiyor, maliyet degismiyor.
+- **D11 -- anti-alias duvari diz degildir.** Diz Nyquist'e yakin dik bir
+  duvarsa (kaydin anti-alias filtresi) analiz dizi ve tabani o duvarin altinda
+  yeniden ariyor; duvar yalnizca not. Karanlik ama kayipsiz kayit + keskin
+  filtre, filtresiz haliyle ayni hukmu aliyor ("belirsiz"; once "kayipli").
+  Yeni diz ancak kesim medyanina 2 kHz'ten yakinsa kullaniliyor: ilk surum iki
+  kayipli dosyayi (MP3 V0, AAC 128) "belirsiz"e cekti, cunku duvarin altindaki
+  diz kesimden 5.7 / 8.8 kHz uzakti ve icerigin bitisi hakkinda bir sey
+  soylemiyordu. Bu kuralla 231 dosyanin hukmu (dogal ve 96 kHz) degismedi.
+  DOGRULANMADI: 2 kHz sentetik bir kayittan; gercek karanlik + anti-alias
+  kayit sette yok.
+- **D12 -- diz aramasi kesime gore baslar.** Kesim medyani dusukse diz aramasi
+  kesimin 1.5 kHz altindan (en az 2 kHz) basliyor; once hep 8 kHz'ten basliyordu
+  ve 32/48 kbps MP3'un 4-8 kHz duvari gorulmuyordu. 5 gercek parcanin
+  32/48/64 kbps MP3'u: once 15'te 10 "kayipli", simdi 15'te 15. 231 dosyanin
+  hukmu degismedi.
+- **D14, D15 -- kodlayici sinirlari isten once.** Hizlar ve kanal duzenleri
+  `ffmpeg -h encoder=X` ciktisindan okunuyor; bildirilmeyenler olculdu (wmav2:
+  48 kHz ve 2 kanal; libvorbis bit hizi modu 88.2/96 kHz'te kurulamiyor, kalite
+  modu 192 kHz'e kadar calisiyor; libopus "(side)" duzenlerini reddediyor).
+  Desteklenmeyen hiz kodlamadan once ACIKCA soxr ile cevriliyor (once kaynagin
+  ustundeki en kucuk kabul edilen hiz, yoksa en buyuk) ve not ediliyor: ffmpeg
+  varsayilan resampler'i 96 kHz MP3/AC-3/MP2'yi sessizce 48'e indiriyordu.
+  Fazla kanal is baslamadan anlasilir bir iletiyle durduruluyor (otomatik
+  downmix yok); Opus'ta 5.1(side) yalnizca 5.1 olarak yeniden etiketleniyor.
+  Panel bunlari baslatmadan once gosteriyor, merdiven de ayni adimdan geciyor.

@@ -158,8 +158,11 @@ def candidate_dirs(*, explicit: Path | None = None, app_dir: Path | None = None)
                 add(build / "bin")
 
     for entry in os.environ.get("PATH", "").split(os.pathsep):
-        if entry.strip():
-            add(Path(entry.strip()))
+        # Windows PATH girdileri tirnakli olabilir ("C:\Program Files\x");
+        # tirnakli girdi var olmayan bir yol sanilip atlaniyordu (denetim D30).
+        cleaned = entry.strip().strip('"').strip()
+        if cleaned:
+            add(Path(cleaned))
 
     return out
 
@@ -270,6 +273,7 @@ def discover(
     toplanir ve bulunamama hatasinda kullaniciya gosterilir.
     """
     searched: list[str] = []
+    lacking: tuple[str, list[str]] | None = None
     for directory in candidate_dirs(explicit=explicit, app_dir=app_dir):
         pair = _pair_in(directory)
         if pair is None:
@@ -291,10 +295,14 @@ def discover(
 
         missing = caps.missing_required()
         if missing:
-            if require:
-                raise FFmpegCapabilityError(str(ffmpeg), missing)
+            # Eksik yetenekli aday kesfi DURDURMAZ: sonraki adaylar da denenir.
+            # Once ilk kusurlu adayda hata atiliyordu ve PATH'te sonra gelen
+            # saglam bir ffmpeg hic denenmiyordu (D30).
+            lacking = lacking or (str(ffmpeg), missing)
             searched.append(f"{directory} - missing {', '.join(missing)}")
             continue
         return FFmpegTools(ffmpeg=ffmpeg, ffprobe=ffprobe, caps=caps)
 
+    if require and lacking is not None:
+        raise FFmpegCapabilityError(*lacking)
     raise FFmpegNotFoundError(searched)

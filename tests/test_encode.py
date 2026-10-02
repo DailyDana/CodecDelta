@@ -281,3 +281,90 @@ def test_failure_raises_and_leaves_no_file(
     with pytest.raises(FFmpegFailedError):
         jobs.run_with_progress(ffmpeg_tools.ffmpeg, job, duration=3.0, on_progress=lambda _: None)
     assert not output.exists()
+
+
+# -- kodlayici sinirlari (denetim D14, D15) -------------------------------------------
+
+_LAME_HELP = """Encoder libmp3lame [libmp3lame MP3 (MPEG audio layer 3)]:
+    Supported sample rates: 44100 48000 32000 22050 24000 16000 11025 12000 8000
+    Supported sample formats: s32p fltp s16p
+    Supported channel layouts: mono stereo
+"""
+_AC3_HELP = """    Supported sample rates: 48000 44100 32000
+    Supported channel layouts: mono stereo 2 channels (FC+LFE) 2.1 5.1(side) 5.1
+"""
+
+
+def test_encoder_limits_are_read_from_ffmpeg_help() -> None:
+    lame = jobs.parse_limits(_LAME_HELP)
+    assert lame.rates is not None and 44100 in lame.rates and 96000 not in lame.rates
+    assert lame.max_channels == 2
+    assert jobs.parse_limits(_AC3_HELP).max_channels == 6
+    vorbis = "Encoder libvorbis\n    Supported sample formats: fltp\n"
+    assert jobs.parse_limits(vorbis) == jobs.EncoderLimits()
+
+
+def _job(codec: str, rate: int, bitrate: int | None = 192) -> jobs.EncodeJob:
+    return jobs.EncodeJob(
+        source=Path("in.flac"),
+        output=Path("out.x"),
+        codec=codec,
+        bitrate_kbps=bitrate,
+        source_rate=rate,
+    )
+
+
+def test_unsupported_rate_is_converted_explicitly_with_soxr() -> None:
+    """96 kHz MP3 ffmpeg'in varsayilan resampler'iyla sessizce 48'e iniyordu (D15)."""
+    job, notes = jobs.prepare(_job("libmp3lame", 96000), jobs.parse_limits(_LAME_HELP), channels=2)
+    assert job.target_rate == 48000 and notes
+    args = jobs.build_args(job)
+    chain = args[args.index("-af") + 1]
+    assert "resampler=soxr" in chain and "aresample=48000" in chain
+    # Desteklenen hizda dokunulmaz
+    same, quiet = jobs.prepare(_job("libmp3lame", 44100), jobs.parse_limits(_LAME_HELP), channels=2)
+    assert same.target_rate is None and not quiet and "-af" not in jobs.build_args(same)
+
+
+def test_rate_choice_prefers_the_next_rate_up() -> None:
+    """44.1 -> Opus 48 (bilgi kaybi yok); 96 -> MP3 48 (en yuksek kabul edilen)."""
+    opus = jobs.EncoderLimits(rates=(48000, 24000, 16000, 12000, 8000))
+    assert jobs.prepare(_job("libopus", 44100), opus, channels=2)[0].target_rate == 48000
+    assert jobs.prepare(_job("libopus", 96000), opus, channels=2)[0].target_rate == 48000
+
+
+def test_vorbis_bitrate_mode_is_limited_to_48_khz() -> None:
+    """libvorbis bit hizi modu 88.2/96 kHz'te "encoder setup failed" (D14, olculdu)."""
+    none = jobs.EncoderLimits()
+    assert jobs.prepare(_job("libvorbis", 96000), none, channels=2)[0].target_rate == 48000
+    quality = _job("libvorbis", 96000, bitrate=None)
+    assert jobs.prepare(quality, none, channels=2)[0].target_rate is None
+
+
+def test_too_many_channels_stops_before_encoding() -> None:
+    """WMA/MP3'e 5.1 kaynak ham ffmpeg hatasiyla dusuyordu; downmix YAPILMAZ (D14)."""
+    with pytest.raises(jobs.EncodeUnsupportedError):
+        jobs.prepare(_job("libmp3lame", 48000), jobs.parse_limits(_LAME_HELP), channels=6)
+    wma = jobs.EncoderLimits(rates=None, max_channels=2)
+    with pytest.raises(jobs.EncodeUnsupportedError):
+        jobs.prepare(_job("wmav2", 48000), wma, channels=6)
+
+
+def test_opus_side_layouts_are_relabelled() -> None:
+    """libopus "5.1(side)" duzenini reddediyordu; kanallar ayni, yalnizca etiket (D14)."""
+    job, notes = jobs.prepare(
+        _job("libopus", 48000), jobs.EncoderLimits(), channels=6, channel_layout="5.1(side)"
+    )
+    assert job.filters == ("channelmap=channel_layout=5.1",) and notes
+    with pytest.raises(jobs.EncodeUnsupportedError):
+        jobs.prepare(
+            _job("libopus", 48000), jobs.EncoderLimits(), channels=8, channel_layout="7.1(wide)"
+        )
+
+
+@pytest.mark.needs_ffmpeg
+def test_wma_limits_come_from_measurement(ffmpeg_tools: FFmpegTools) -> None:
+    """wmav2 sinirlarini bildirmiyor; olculmus sinirlar uygulanir."""
+    limits = jobs.encoder_limits(ffmpeg_tools.ffmpeg, "wmav2")
+    assert limits.max_channels == 2
+    assert limits.rates is not None and max(limits.rates) == 48000

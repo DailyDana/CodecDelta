@@ -16,10 +16,11 @@ import time
 import traceback
 from collections.abc import Callable
 
-from PyQt6.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QObject, Qt, QThread, pyqtSignal, pyqtSlot
 
 from app.core.errors import CancelledError, CodecDeltaError
 from app.core.ffmpeg_runner import CancelToken
+from app.ui.i18n import localize
 
 JobFn = Callable[[CancelToken, Callable[[str], None]], object]
 
@@ -46,7 +47,8 @@ class _Job(QObject):
             if self._token.cancelled:
                 self.cancelled.emit()
             elif isinstance(exc, CodecDeltaError):
-                self.failed.emit(exc.user_message())
+                # Ileti bir `Message` ise arayuzun dilinde (D28).
+                self.failed.emit(localize(exc.args[0]) if exc.args else exc.user_message())
             else:
                 self.failed.emit("".join(traceback.format_exception_only(exc)).strip())
         else:
@@ -87,8 +89,13 @@ class Runner(QObject):
         self._job.succeeded.connect(self.succeeded)
         self._job.failed.connect(self.failed)
         self._job.cancelled.connect(self.cancelled)
+        # DOGRUDAN baglanti: `quit` is parcaciginda cagrilir (QThread.quit
+        # is parcacigi guvenli). Kuyruklu baglantida quit ana is parcacigina
+        # gidiyordu; kapanista ana is parcacigi `wait()` icinde bloke oldugu
+        # icin hic calismiyor ve pencere 10 s donuyordu (denetim D16).
         for signal in (self._job.succeeded, self._job.failed, self._job.cancelled):
-            signal.connect(self._thread.quit)
+            # PyQt6 stub'u baglanti turu argumanini tanimlamiyor; calisma zamani destekler.
+            signal.connect(self._thread.quit, Qt.ConnectionType.DirectConnection)  # type: ignore[call-arg]
         self._thread.finished.connect(self._cleanup)
         self.busy_changed.emit(True)
         self._thread.start()

@@ -343,3 +343,53 @@ def test_estimate_from_audio_finds_its_own_coarse_offset(ratio: float) -> None:
     result = drift.estimate_from_audio(source, test, RATE)
     assert result.ratio == pytest.approx(ratio, abs=2e-6)
     assert result.offset_s == pytest.approx(3.7, abs=2e-3)
+
+
+def test_ambiguity_separates_a_tone_from_broadband_content() -> None:
+    """Periyodik sinyalde ikinci tepe ana tepeye esit; genis bantli sinyalde degil.
+
+    Capa gibi: uzun sinyalden kesilmis referans dilimi ve test penceresi; test
+    tarafinda codec gurultusu yerine BAGIMSIZ gurultu (ortak gurultu gecikmeyi
+    gercekten belirler).
+    """
+    from app.align import gccphat
+
+    rng = np.random.default_rng(3)
+    t = np.arange(40_000) / 8000.0
+
+    def pair(x: np.ndarray, noise_db: float) -> float:
+        coded = x + 10 ** (noise_db / 20) * np.std(x) * rng.standard_normal(x.size)
+        return gccphat.ambiguity(x[:20_000], coded[3000:19_000])
+
+    noise = rng.standard_normal(t.size)
+    lowpassed = np.fft.irfft(np.fft.rfft(noise) * (np.arange(20_001) < 3000), t.size)
+    assert pair(np.sin(2 * np.pi * 1000.0 * t), -40) > 0.9
+    assert pair(np.sin(2 * np.pi * 440.0 * t), -40) > 0.9
+    assert pair(noise, -40) < 0.2
+    assert pair(lowpassed, -80) < 0.3
+    assert gccphat.ambiguity(np.zeros(100), np.zeros(100)) == 0.0
+
+
+def test_lazy_windows_match_a_full_rescale() -> None:
+    """Pencere pencere hiz telafisi, tum diziyi yeniden orneklemekle ayni (D5)."""
+    x = (music_like(5.0, seed=4) * 32767).astype(np.int16)
+    ratio = 1.0 / (25.0 / 24.0)
+    count = int(x.size / ratio)
+    full = np.interp(np.arange(count) * ratio, np.arange(x.size), x.astype(np.float64))
+    lazy = drift._Lazy(x, ratio)
+    assert lazy.size == count
+    for start, stop in ((0, 4000), (12_345, 20_000), (count - 500, count + 100)):
+        np.testing.assert_allclose(lazy[start:stop], full[start:stop], rtol=0, atol=1e-9)
+    assert np.concatenate(list(lazy.chunks(7000))).size == count
+
+
+def test_int16_samples_give_the_same_drift_as_floats() -> None:
+    """Plan artik int16 ornekleri dogrudan veriyor; hiz tahmini olcekten bagimsiz."""
+    source = music_like(60.0, seed=6)
+    test = resample(source, 1.0002)
+    as_float = drift.estimate_from_audio(source, test, RATE)
+    as_int = drift.estimate_from_audio(
+        (source * 32767).astype(np.int16), (test * 32767).astype(np.int16), RATE
+    )
+    assert as_int.status == as_float.status
+    assert as_int.ppm == pytest.approx(as_float.ppm, abs=1.0)

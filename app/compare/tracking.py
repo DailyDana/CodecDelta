@@ -94,7 +94,12 @@ def _read_windows(
 ) -> list[_Window]:
     length = int(_REFINE_WINDOW_S * rate)
     lo, hi = span
-    windows = []
+    windows: list[_Window] = []
+    if hi - lo < length:
+        # Ortusme bir pencereden kisa: `linspace` negatif baslangiclar uretip
+        # okuyucuyu `ValueError` ile dusuruyordu (denetim D9). Model oldugu
+        # gibi kalir.
+        return windows
     for start in np.linspace(lo, hi - length, _REFINE_POINTS).astype(np.int64):
         ends = np.array([start, start + length - 1], dtype=np.float64)
         wanted = ends - model.at(ends)

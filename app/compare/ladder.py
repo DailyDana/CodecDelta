@@ -32,7 +32,7 @@ from app.compare.result import ComparisonResult
 from app.core.ffmpeg_runner import CancelToken
 from app.core.ffmpeg_stream import DEFAULT_RESAMPLE, ResampleCfg
 from app.core.messages import Message
-from app.encode.jobs import EncodeJob
+from app.encode.jobs import EncodeJob, encoder_limits, prepare
 from app.encode.jobs import run as run_encode
 
 # Varsayilan basamaklar (kbps). Opus icin tipik "duyulur / sinirda / seffaf" araligi.
@@ -126,7 +126,10 @@ def place(values: Sequence[float], bitrates: Sequence[int], test_value: float) -
     Eksen "buyuk = daha iyi" olmali (S/N). NMR icin cagiran taraf isareti
     cevirir. Ara degerleme log2(bitrate) uzerinde dogrusal.
     """
-    if math.isnan(test_value) or len(values) < 2 or any(math.isnan(v) for v in values):
+    # -inf (testte hic koherent guc yok) bir konum degil: "64k'nin altinda"
+    # demek yanilticiydi (denetim D10). +inf (birebir kopya) "ustunde" sayilir.
+    unusable = math.isnan(test_value) or test_value == -math.inf
+    if unusable or len(values) < 2 or not all(math.isfinite(v) for v in values):
         return Placement("unknown", None, None, None, False)
     order = np.argsort(bitrates)
     rates = np.asarray(bitrates, dtype=np.float64)[order]
@@ -168,8 +171,7 @@ def build(
         if stage is not None:
             stage(f"rung:{bitrate}")
         path = workdir / f"ladder_{codec}_{bitrate}k.{extension}"
-        run_encode(
-            ffmpeg,
+        job, _ = prepare(
             EncodeJob(
                 source=reference.path,
                 output=path,
@@ -178,9 +180,11 @@ def build(
                 stream_index=reference.stream_index,
                 source_rate=reference.stream.sample_rate,
             ),
-            resample=resample,
-            cancel=cancel,
+            encoder_limits(ffmpeg, codec),
+            channels=reference.stream.channels,
+            channel_layout=reference.stream.channel_layout,
         )
+        run_encode(ffmpeg, job, resample=resample, cancel=cancel)
         try:
             result = compare(
                 ffmpeg, reference, open_track(ffprobe, path), resample=resample, cancel=cancel

@@ -15,11 +15,13 @@ birakilir, yalnizca bin basina uc toplam tutulur.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
+from typing import Protocol
 
 import numpy as np
 
@@ -56,6 +58,21 @@ BAND_EDGES_HZ: tuple[float, ...] = (
     24000.0,
 )
 BROADBAND_HZ = (20.0, 20000.0)
+
+# Hizalama denetimi blok uzunlugu (s) ve PHAT tepesinin sifirdan en fazla
+# uzakligi (ornek). Cerceveler zaten hizali oldugu icin tepe sifirdadir;
+# +-2 kesirli artiga ve pencere etkisine pay birakir.
+_GATE_BLOCK_S = 1.0
+_GATE_MAX_LAG = 2
+# Olcume katilan blok orani bunun altindaysa sonuc olculmemis sayilir: plan
+# gecikmesi dosyanin cogunluguna ait degil.
+_GATE_MIN_KEPT = 0.5
+
+# Referansin side gucu mid'inkinin bu katindan (-60 dB) azsa side olculmez.
+_EMPTY_SIDE = 1e-6
+
+# Taban kesiti icin denenen konumlar (kaydin kullanilabilir kismina gore kesir).
+_EXCERPT_FRACTIONS = (0.5, 0.25, 0.75, 0.1, 0.9)
 
 # Raporlanan en ust frekans, Nyquist'in kesri olarak (bkz. `compare`).
 NYQUIST_FRACTION = 0.99
@@ -126,11 +143,27 @@ def band_layout(analysis_rate: int, nyquist_hz: float) -> list[tuple[float, floa
 def _mid_side(
     block: np.ndarray, channel_map: tuple[int, ...]
 ) -> tuple[np.ndarray, np.ndarray | None]:
+    """Mid = TUM kanallarin ortalamasi, side = on sol - sag.
+
+    Stereo'da mid (L+R)/2'dir. Cok kanalli dosyada yalnizca ilk iki kanali
+    almak merkezdeki diyalogu ve arka kanallari olcumun disinda birakiyordu:
+    icerigi yalnizca merkezde olan 5.1 dosya "olculdu" ama S/N -inf cikiyordu
+    (denetim D2). Plan hizalamayi zaten tum kanallarin ortalamasiyla yapiyor
+    (`to_mono`); olcum ayni kanali kullanir.
+    """
     if block.shape[1] == 1:
         return block[:, 0].astype(np.float64), None
-    left = block[:, channel_map[0] if channel_map else 0].astype(np.float64)
-    right = block[:, channel_map[1] if channel_map else 1].astype(np.float64)
-    return (left + right) * 0.5, (left - right) * 0.5
+    ordered = block[:, list(channel_map)] if channel_map else block
+    ordered = ordered.astype(np.float64)
+    left, right = ordered[:, 0], ordered[:, 1]
+    mid = (left + right) * 0.5 if ordered.shape[1] == 2 else ordered.mean(axis=1)
+    return mid, (left - right) * 0.5
+
+
+class _Sink(Protocol):
+    """Gecislerin spektrum ciftlerini verdigi hedef."""
+
+    def add(self, a: np.ndarray, b: np.ndarray) -> None: ...
 
 
 class _Fanout:
@@ -145,6 +178,137 @@ class _Fanout:
     def add(self, a: np.ndarray, b: np.ndarray) -> None:
         for sink in self.sinks:
             sink.add(a, b)
+
+
+class _BlockGate:
+    """Ana gecisin spektrumlarini ~1 s'lik bloklar halinde denetleyip iletir.
+
+    Hizalama plani gecikmeyi birkac pencereden olcer; dosyanin geri kalaninin
+    AYNI gecikmeyle hizali oldugu varsayilir. Duzenlenmis bir dosyada (ortadan
+    kesilmis, sonu degistirilmis) bu varsayim bozulur ve hizasiz bolumler
+    codec gurultusu diye olculur: gercek 21.7 dB, kesik dosyada 0.7-3.0 dB,
+    cogu zaman uyarisiz (denetim D1).
+
+    Her blokta mid capraz spektrumunun PHAT tepesi bulunur. Hizali bir blokta
+    tepe sifir gecikmededir (cerceveler zaten hizali); hizasiz bir blokta
+    rastgele bir yere duser. Korelasyon DEGIL tepe konumu kullaniliyor: codec
+    gurultusu yuksek ama hizali bir blok (sessiz pasaj, dusuk bitrate) dusuk
+    korelasyon verir ve atilirsa S/N oldugundan iyi gorunurdu; PHAT tepesinin
+    YERI ise dusuk S/N'de de dogru kalir.
+
+    Hizasiz bloklar olcume katilmaz ve sayilir; side ayni karari paylasir.
+
+    Sinir bloklari: kesimin tam ustune dusen blok yari hizalidir ve PHAT tepesi
+    yine sifirda cikar. Birkac saniyelik ilgisiz ses bile S/N'i cok bozar
+    (olculen: son 13 s'si degistirilmis dosyada 2 s'lik bloklarla 12.05 yerine
+    6.94 dB). Bu yuzden hizasiz her bolgenin iki yanindaki birer blok da
+    atilir (tutulan kumenin bir blok asinmasi): blok i ancak i-1, i ve i+1
+    hizaliysa olcume girer. Bedeli kesim basina ~2 s iyi ses.
+    """
+
+    def __init__(
+        self,
+        mid: _Fanout,
+        side: _Fanout | None,
+        *,
+        fft_size: int,
+        frames_per_block: int,
+    ) -> None:
+        self._mid, self._side = mid, side
+        self._fft_size = fft_size
+        self._block = frames_per_block
+        self._mid_buf: list[tuple[np.ndarray, np.ndarray]] = []
+        self._side_buf: list[tuple[np.ndarray, np.ndarray]] = []
+        self.kept_frames = 0
+        self.dropped_frames = 0
+        # Bir blok gecikmeli karar: (mid, side, kendi karari, oncekinin karari)
+        self._held: (
+            tuple[tuple[np.ndarray, np.ndarray], tuple[np.ndarray, np.ndarray] | None, bool, bool]
+            | None
+        ) = None
+        self._last_decision = True
+        self.mid = _GateInput(self, is_side=False)
+        self.side = _GateInput(self, is_side=True) if side is not None else None
+
+    @staticmethod
+    def _count(buf: list[tuple[np.ndarray, np.ndarray]]) -> int:
+        return sum(a.shape[0] for a, _ in buf)
+
+    @staticmethod
+    def _take(buf: list[tuple[np.ndarray, np.ndarray]], n: int) -> tuple[np.ndarray, np.ndarray]:
+        a = np.concatenate([x for x, _ in buf])
+        b = np.concatenate([y for _, y in buf])
+        buf.clear()
+        if a.shape[0] > n:
+            buf.append((a[n:], b[n:]))
+        return a[:n], b[:n]
+
+    def push(self, a: np.ndarray, b: np.ndarray, *, is_side: bool) -> None:
+        (self._side_buf if is_side else self._mid_buf).append((a, b))
+        self._flush(self._block)
+
+    def _flush(self, need: int) -> None:
+        while self._count(self._mid_buf) >= need and (
+            self._side is None or self._count(self._side_buf) >= need
+        ):
+            mid_block = self._take(self._mid_buf, need)
+            side_block = self._take(self._side_buf, need) if self._side is not None else None
+            decision = self._aligned(*mid_block)
+            self._release(next_decision=decision)
+            self._held = (mid_block, side_block, decision, self._last_decision)
+            self._last_decision = decision
+
+    def _release(self, *, next_decision: bool) -> None:
+        """Bekleyen blogu, iki komsusunun karari da bilindiginde iletir ya da atar."""
+        if self._held is None:
+            return
+        (mid_a, mid_b), side_block, own, previous = self._held
+        self._held = None
+        frames = mid_a.shape[0]
+        if own and previous and next_decision:
+            self._mid.add(mid_a, mid_b)
+            if self._side is not None and side_block is not None:
+                self._side.add(*side_block)
+            self.kept_frames += frames
+        else:
+            self.dropped_frames += frames
+
+    def finish(self) -> None:
+        """Son eksik blogu da karara baglar."""
+        remaining = self._count(self._mid_buf)
+        if self._side is not None:
+            remaining = min(remaining, self._count(self._side_buf))
+        if remaining:
+            self._flush(remaining)
+        # Dosya sonu bir kesim degildir: son blok yalnizca kendi ve oncekinin
+        # kararina gore degerlendirilir.
+        self._release(next_decision=True)
+
+    def _aligned(self, a: np.ndarray, b: np.ndarray) -> bool:
+        cross = np.sum(np.conj(a) * b, axis=0)
+        magnitude = np.abs(cross)
+        peak = float(magnitude.max()) if magnitude.size else 0.0
+        power = float(np.sum(np.abs(a) ** 2)) * float(np.sum(np.abs(b) ** 2))
+        if peak <= 0.0 or power <= 0.0:
+            # Sessizlik ya da tek tarafli sessizlik (dropout): hizalama
+            # yargilanamaz, blok tutulur -- dropout gercek bir farktir.
+            return True
+        whitened = cross / np.maximum(magnitude, 1e-12 * peak)
+        correlation = np.fft.irfft(whitened, self._fft_size)
+        index = int(np.argmax(correlation))
+        lag = index if index <= self._fft_size // 2 else index - self._fft_size
+        return abs(lag) <= _GATE_MAX_LAG
+
+
+class _GateInput:
+    """Gecislerin bekledigi `add(a, b)` arayuzunu kapiya baglar."""
+
+    def __init__(self, gate: _BlockGate, *, is_side: bool) -> None:
+        self._gate, self._is_side = gate, is_side
+
+    def add(self, a: np.ndarray, b: np.ndarray) -> None:
+        if a.shape[0]:
+            self._gate.push(a, b, is_side=self._is_side)
 
 
 class _Buffer:
@@ -248,6 +412,15 @@ def compare(
 
     # -- ana gecis -----------------------------------------------------------
     stage("measure")
+    if ref_stream.channels > 2:
+        notes.append(
+            Message(
+                "compare.multichannel",
+                "{channels} channels: mid is the average of all channels, side is front left "
+                "minus front right",
+                channels=ref_stream.channels,
+            )
+        )
     model = tracking.from_plan(alignment, rate)
     if model is None:
         notes.append(
@@ -267,7 +440,10 @@ def compare(
                 "compare.tracked",
                 "clock drift tracked: {ppm:+.2f} ppm, largest deviation from the fit "
                 "{residual:.3f} samples",
-                ppm=model.slope * 1e6,
+                # Model egimi `1 - oran`; plan gerekcesi oran - 1 gosteriyor. Ayni
+                # isaret kullanilmazsa ayni kayma bir yerde +, otekinde - cikiyordu
+                # (denetim D32).
+                ppm=-model.slope * 1e6,
                 residual=model.max_residual,
             )
         )
@@ -285,18 +461,50 @@ def compare(
         gain=plan_gain,
         expected_frames=int(test_env.duration_s * rate) // (fft_size // 2),
     )
-    samples = measure(
+    gate = _BlockGate(
+        _Fanout(mid, nmr),
+        _Fanout(side) if side is not None else None,
+        fft_size=fft_size,
+        frames_per_block=max(8, round(_GATE_BLOCK_S * rate / (fft_size // 2))),
+    )
+    measure(
         ffmpeg,
         ref_source,
         test_source,
         model,
         alignment.channel_map,
-        _Fanout(mid, nmr),
-        _Fanout(side) if side is not None else None,
+        gate.mid,
+        gate.side,
         fft_size=fft_size,
         resample=resample,
         cancel=cancel,
     )
+    gate.finish()
+    hop = fft_size // 2
+    samples = gate.kept_frames * hop
+    excluded_s = gate.dropped_frames * hop / rate
+    total_frames = gate.kept_frames + gate.dropped_frames
+    if total_frames and gate.kept_frames < _GATE_MIN_KEPT * total_frames:
+        notes.append(
+            Message(
+                "compare.mostly_misaligned",
+                "only {kept:.0f} s of {total:.0f} s line up with the reference at the planned "
+                "delay: the files are not a continuous copy of each other",
+                kept=gate.kept_frames * hop / rate,
+                total=total_frames * hop / rate,
+            )
+        )
+        return _not_measured(reference, test, alignment, rate, status="not_measured", notes=notes)
+    if excluded_s > 0:
+        notes.append(
+            Message(
+                "compare.excluded",
+                "{excluded:.1f} s of {total:.1f} s did not line up with the reference (an edit, a "
+                "cut or a different ending) and were left out of the measurement",
+                excluded=excluded_s,
+                total=total_frames * hop / rate,
+            )
+        )
     if mid.frames < 2:
         notes.append(Message("compare.short_overlap", "overlap too short to measure"))
         return _not_measured(reference, test, alignment, rate, status="not_measured", notes=notes)
@@ -313,21 +521,28 @@ def compare(
     nyquist *= min(resample.cutoff, NYQUIST_FRACTION)
     layout = band_layout(rate, nyquist)
     broadband_hz = (BROADBAND_HZ[0], min(BROADBAND_HZ[1], nyquist))
-    floors = calibration.measure_floor(
-        ffmpeg,
-        reference.path,
-        stream_index=reference.stream_index,
-        channels=ref_stream.channels,
-        source_rate=ref_stream.sample_rate,
-        other_rate=test_stream.sample_rate,
-        fractional_delay=0.0 if model.slope else fraction,
-        drift_slope=model.slope,
-        bands_hz=[*layout, broadband_hz],
-        size=fft_size,
-        start=_excerpt_start(reference.info.duration),
-        resample=resample,
-        cancel=cancel,
-    )
+    floors: list[float] = []
+    for start in _excerpt_starts(reference.info.duration):
+        floors = calibration.measure_floor(
+            ffmpeg,
+            reference.path,
+            stream_index=reference.stream_index,
+            channels=ref_stream.channels,
+            source_rate=ref_stream.sample_rate,
+            other_rate=test_stream.sample_rate,
+            fractional_delay=0.0 if model.slope else fraction,
+            drift_slope=model.slope,
+            bands_hz=[*layout, broadband_hz],
+            size=fft_size,
+            start=start,
+            resample=resample,
+            cancel=cancel,
+        )
+        # Kesit sessizse (ortasi sessiz kayit, gizli parca) taban olculemez ve
+        # manset NaN cikiyordu (denetim D7): baska bir konum denenir.
+        if not math.isnan(floors[-1]):
+            break
+    floors = [calibration.combine_floors(f, calibration.NUMERIC_FLOOR_DB) for f in floors]
 
     gain = mid.gain(
         hz_to_bin(broadband_hz[0], rate, fft_size), hz_to_bin(broadband_hz[1], rate, fft_size)
@@ -336,15 +551,31 @@ def compare(
     def band(lo_hz: float, hi_hz: float, floor_db: float) -> BandResult:
         lo, hi = hz_to_bin(lo_hz, rate, fft_size), hz_to_bin(hi_hz, rate, fft_size)
         hi = max(hi, lo + 1)
+        mid_stats = mid.band(lo, hi, gain=gain)
+        side_stats = side.band(lo, hi, gain=gain) if side is not None else None
+        if (
+            side_stats is not None
+            and side_stats.reference_power <= _EMPTY_SIDE * mid_stats.reference_power
+        ):
+            # Referansin bu bantta side icerigi yok (L=R, dual mono): side S/N
+            # tanimsiz ve aciklamasiz NaN/-inf gosteriliyordu (denetim D10).
+            # Referansta side VARKEN testte cokmusse -inf gercek bir bulgudur
+            # ve bu kurala girmez.
+            side_stats = None
         return BandResult(
-            lo_hz=lo_hz,
-            hi_hz=hi_hz,
-            mid=mid.band(lo, hi, gain=gain),
-            side=side.band(lo, hi, gain=gain) if side is not None else None,
-            floor_db=floor_db,
+            lo_hz=lo_hz, hi_hz=hi_hz, mid=mid_stats, side=side_stats, floor_db=floor_db
         )
 
     bands = tuple(band(lo, hi, f) for (lo, hi), f in zip(layout, floors[:-1], strict=True))
+    broadband = band(*broadband_hz, floors[-1])
+    if side is not None and broadband.side is None:
+        notes.append(
+            Message(
+                "compare.no_side",
+                "the reference has no side (left minus right) content, as in dual mono: "
+                "side is not measured",
+            )
+        )
     return ComparisonResult(
         reference=reference.summary(),
         test=test.summary(),
@@ -352,11 +583,12 @@ def compare(
         status="measured",
         analysis_rate=rate,
         bands=bands,
-        broadband=band(*broadband_hz, floors[-1]),
+        broadband=broadband,
         gain_db=db(abs(gain)),
         polarity=-1 if gain < 0 else 1,
         frames=mid.frames,
         samples=samples,
+        excluded_s=excluded_s,
         nmr=nmr.summary(),
         notes=tuple(notes),
     )
@@ -370,11 +602,16 @@ def _overlap(model: DelayModel, ref_length: float, test_length: float) -> tuple[
     return int(lo + pad), int(hi - pad)
 
 
-def _excerpt_start(duration: float | None) -> float | None:
-    """Taban kesiti icin baslangic: kaydin ortasina yakin, sessiz giris/cikistan uzak."""
+def _excerpt_starts(duration: float | None) -> list[float | None]:
+    """Taban kesiti icin aday baslangiclar, tercih sirasiyla.
+
+    Once ortasi (sessiz giris/cikistan uzak); orasi sessizse ceyrekler, sonra
+    kenarlara yakin konumlar.
+    """
     if duration is None or duration <= calibration.DEFAULT_EXCERPT_S * 1.5:
-        return None
-    return max(0.0, duration / 2.0 - calibration.DEFAULT_EXCERPT_S / 2.0)
+        return [None]
+    room = duration - calibration.DEFAULT_EXCERPT_S
+    return [max(0.0, f * room) for f in _EXCERPT_FRACTIONS]
 
 
 def _main_pass(
@@ -383,8 +620,8 @@ def _main_pass(
     test_source: Source,
     model: DelayModel,
     channel_map: tuple[int, ...],
-    mid: _Fanout,
-    side: _Fanout | None,
+    mid: _Sink,
+    side: _Sink | None,
     *,
     fft_size: int,
     resample: ResampleCfg,
@@ -463,8 +700,8 @@ def _tracked_pass(
     test_source: Source,
     model: DelayModel,
     channel_map: tuple[int, ...],
-    mid: _Fanout,
-    side: _Fanout | None,
+    mid: _Sink,
+    side: _Sink | None,
     *,
     fft_size: int,
     resample: ResampleCfg,

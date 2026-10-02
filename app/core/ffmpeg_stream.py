@@ -36,8 +36,9 @@ from typing import Protocol, cast
 
 import numpy as np
 
-from app.core.errors import FFmpegFailedError
+from app.core.errors import FFmpegFailedError, UnsupportedInputError
 from app.core.ffmpeg_runner import CancelToken, StderrCollector, kill_tree, spawn
+from app.core.messages import Message
 
 # Okuma tamponu. Olculen egride 256 KB - 4 MB araligi duz; 1 MB hem sistem
 # cagrisi sayisini dusuk tutar hem 10 s'lik bloklarla dogal ortusur.
@@ -161,10 +162,16 @@ class PcmStream:
         fmt: str = "f32le",
         cancel: CancelToken | None = None,
     ) -> None:
+        # channels=0 ile cerceve boyu sifirdi: okuma hemen bitiyor, ffmpeg dolu
+        # boruda bloke kaliyor ve 30 s sonra ham TimeoutExpired geliyordu (D39).
+        if channels < 1 or sample_rate < 1:
+            raise ValueError(f"gecersiz akis: {channels} kanal, {sample_rate} Hz")
         self.sample_rate = sample_rate
         self.channels = channels
         self.dtype = _DTYPES[fmt]
         self.frame_bytes = self.dtype.itemsize * channels
+        # Sonlu olmayan (NaN/inf) ve sifira cevrilen ornek sayisi (D35).
+        self.nonfinite = 0
         self._args = (str(exe), *args)
         self._cancel = cancel
         self._eof = False
@@ -221,13 +228,28 @@ class PcmStream:
                 self._eof = True
                 break
             frames = filled // self.frame_bytes
-            if frames == 0:
-                # Tam cerceveden az veri: bozuk akis, sessizce yutulmaz.
+            if filled % self.frame_bytes:
+                # Yarim cerceve: akis cercevenin ortasinda bitti. Once kalan
+                # baytlar sessizce atiliyordu (D39); bozuk akis hatadir.
                 self._eof = True
-                break
-            yield np.frombuffer(buf, dtype=self.dtype, count=frames * self.channels).reshape(
+                self.close(kill=True)
+                raise UnsupportedInputError(
+                    Message(
+                        "stream.partial_frame",
+                        "the decoder output ended in the middle of a sample frame",
+                    )
+                )
+            block = np.frombuffer(buf, dtype=self.dtype, count=frames * self.channels).reshape(
                 frames, self.channels
             )
+            if self.dtype.kind == "f":
+                bad = ~np.isfinite(block)
+                if bad.any():
+                    # Float WAV'da tek bir NaN/inf ornek analizi ham ValueError
+                    # ile dusuruyordu (D35): sessizlik sayilir ve sayilir.
+                    self.nonfinite += int(bad.sum())
+                    block = np.where(bad, 0.0, block).astype(self.dtype)
+            yield block
             if filled < block_bytes:
                 self._eof = True
                 break
@@ -236,7 +258,11 @@ class PcmStream:
 
     def _finish(self) -> None:
         """Surecin duzgun bittigini dogrular, aksi halde hata firlatir."""
-        self._proc.wait(timeout=30)
+        try:
+            self._proc.wait(timeout=30)
+        except subprocess.TimeoutExpired as exc:
+            kill_tree(self._proc)
+            raise FFmpegFailedError(self._args, -1, "did not exit after its output ended") from exc
         self._stderr.join()
         if self._proc.returncode not in (0, None):
             raise FFmpegFailedError(self._args, self._proc.returncode, self._stderr.tail())
