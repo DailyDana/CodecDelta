@@ -295,7 +295,10 @@ class _BlockGate:
             return True
         whitened = cross / np.maximum(magnitude, 1e-12 * peak)
         correlation = np.fft.irfft(whitened, self._fft_size)
-        index = int(np.argmax(correlation))
+        # Mutlak deger: polaritesi ters bir kopyada tepe NEGATIFTIR. Isaretli
+        # maksimum her blogu hizasiz sayiyor ve ters polariteli kayipsiz kopya
+        # "30 s'nin 0 s'si hizali" diye olculmuyordu (ABX testi yazilirken bulundu).
+        index = int(np.argmax(np.abs(correlation)))
         lag = index if index <= self._fft_size // 2 else index - self._fft_size
         return abs(lag) <= _GATE_MAX_LAG
 

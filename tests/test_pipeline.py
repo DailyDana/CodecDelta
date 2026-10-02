@@ -608,3 +608,31 @@ def test_a_periodic_envelope_with_a_new_ending_still_aligns(
     result = _run(ffmpeg_tools, reference, _spliced(ff, reference, tmp_path / "end.opus", 30))
     assert result.status == "measured", (result.plan.reasons, result.notes)
     assert 8.0 < result.excluded_s < 13.0
+
+
+@pytest.mark.needs_ffmpeg
+@pytest.mark.parametrize("codec", ["flac", "libopus"])
+def test_an_inverted_copy_is_measured(
+    ffmpeg_tools: FFmpegTools, files: dict[str, Path], tmp_path: Path, codec: str
+) -> None:
+    """Blok kapisi tepeyi isaretli ariyordu: ters polariteli kayipsiz kopya olculmuyordu."""
+    test = tmp_path / ("inv.flac" if codec == "flac" else "inv.opus")
+    subprocess.run(
+        [
+            str(ffmpeg_tools.ffmpeg),
+            "-y",
+            "-v",
+            "error",
+            "-i",
+            str(files["ref"]),
+            "-af",
+            "volume=-1",
+            "-c:a",
+            codec,
+            str(test),
+        ],
+        check=True,
+    )
+    result = _run(ffmpeg_tools, files["ref"], test)
+    assert result.status == "measured", result.notes
+    assert result.polarity == -1 and result.excluded_s == 0.0
