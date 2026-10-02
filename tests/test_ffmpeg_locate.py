@@ -155,3 +155,46 @@ def test_discovered_build_has_expected_capabilities(ffmpeg_tools: object) -> Non
     assert ffmpeg_tools.ffprobe.is_file()
     assert not ffmpeg_tools.caps.missing_required()
     assert ffmpeg_tools.caps.version
+
+
+# -- kesif dayanikliligi (denetim D30) ----------------------------------------------
+
+
+def test_a_quoted_path_entry_is_a_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Tirnakli PATH girdisi var olmayan bir yol sanilip atlaniyordu."""
+    monkeypatch.setenv("PATH", f'"{tmp_path}"')
+    assert tmp_path.resolve() in candidate_dirs()
+
+
+def test_a_defective_candidate_does_not_stop_discovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Eksik yetenekli ilk aday kesfi durduruyordu; sonraki saglam aday denenmiyordu."""
+    from app.core import ffmpeg_locate
+    from app.core.errors import FFmpegCapabilityError
+
+    broken, good = tmp_path / "broken", tmp_path / "good"
+    for folder in (broken, good):
+        folder.mkdir()
+        (folder / f"ffmpeg{EXE}").write_bytes(b"stub")
+        (folder / f"ffprobe{EXE}").write_bytes(b"stub")
+    full = frozenset(ffmpeg_locate.REQUIRED_FILTERS)
+
+    def fake_probe(ffmpeg: Path) -> Capabilities:
+        filters = frozenset() if ffmpeg.parent == broken.resolve() else full
+        return Capabilities(
+            version="x", build_flags=frozenset(), encoders=frozenset(), filters=filters
+        )
+
+    monkeypatch.setattr(ffmpeg_locate, "probe_capabilities", fake_probe)
+    # Makinedeki gercek kurulumlar (winget) aday olmasin.
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    monkeypatch.setenv("PATH", str(good))
+    tools = ffmpeg_locate.discover(explicit=broken, app_dir=tmp_path / "none")
+    assert tools.ffmpeg.parent == good.resolve()
+    # Saglam aday yoksa eksik yetenek hatasi yine anlasilir bicimde gelir
+    monkeypatch.setenv("PATH", "")
+    with pytest.raises(FFmpegCapabilityError):
+        ffmpeg_locate.discover(explicit=broken, app_dir=tmp_path / "none")
