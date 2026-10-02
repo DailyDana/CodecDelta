@@ -215,20 +215,22 @@ class AbxSession:
                     )
                 )
             else:
+                # Yuzdeler 0-100 sayi olarak: "%" isaretinin yeri dile gore degisir
+                # (Turkcede once gelir), `:.0%` bicimi onu hep sona koyuyordu.
                 params = {
                     "correct": correct,
                     "n": n,
                     "p": outcome.p_value,
-                    "acc": outcome.accuracy,
-                    "lo": outcome.ci_low,
-                    "hi": outcome.ci_high,
+                    "acc": 100 * outcome.accuracy,
+                    "lo": 100 * outcome.ci_low,
+                    "hi": 100 * outcome.ci_high,
                 }
                 if outcome.p_value < self.alpha:
                     out.append(
                         Message(
                             "abx.shown",
                             "An audible difference was shown: {correct}/{n} correct, "
-                            "p = {p:.3f}. Accuracy {acc:.0%} (95% CI {lo:.0%}-{hi:.0%}).",
+                            "p = {p:.3f}. Accuracy {acc:.0f}% (95% CI {lo:.0f}%-{hi:.0f}%).",
                             **params,
                         )
                     )
@@ -237,7 +239,7 @@ class AbxSession:
                         Message(
                             "abx.not_shown",
                             "An audible difference was NOT shown: {correct}/{n} correct, "
-                            "p = {p:.3f}. Accuracy {acc:.0%} (95% CI {lo:.0%}-{hi:.0%}).",
+                            "p = {p:.3f}. Accuracy {acc:.0f}% (95% CI {lo:.0f}%-{hi:.0f}%).",
                             **params,
                         )
                     )
@@ -245,9 +247,9 @@ class AbxSession:
                         Message(
                             "abx.not_same",
                             "This does NOT mean the files sound the same. The test's power was "
-                            "about {power:.0%}; at most {hi:.0%} discrimination fits the data.",
-                            power=outcome.power,
-                            hi=outcome.max_discrimination,
+                            "about {power:.0f}%; at most {hi:.0f}% discrimination fits the data.",
+                            power=100 * outcome.power,
+                            hi=100 * outcome.max_discrimination,
                         )
                     )
                     if outcome.ci_low <= 0.5:

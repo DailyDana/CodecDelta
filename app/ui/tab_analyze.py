@@ -12,7 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QFileDialog,
@@ -108,11 +108,13 @@ class ResultsPanel(QWidget):
 
         self.ladder_card, ladder_box = _card()
         self.ladder_button = QPushButton(tr("action.ladder"))
+        self.abx_button = QPushButton(tr("action.abx"))
         self.ladder_label = QLabel()
         self.ladder_label.setWordWrap(True)
         self.ladder_label.setObjectName("Muted")
         row = QHBoxLayout()
         row.addWidget(self.ladder_button)
+        row.addWidget(self.abx_button)
         row.addWidget(self.ladder_label, 1)
         ladder_box.addLayout(row)
         disclaimer = QLabel(tr("disclaimer.audibility"))
@@ -255,6 +257,9 @@ class AnalyzeState:
 
 
 class AnalyzeTab(QWidget):
+    # Kullanici son karsilastirmayi ABX ile dogrulamak istiyor: (sonuc, referans, test).
+    abx_requested = pyqtSignal(object, object, object)
+
     def __init__(
         self, tools: FFmpegTools, settings: Settings, parent: QWidget | None = None
     ) -> None:
@@ -309,6 +314,7 @@ class AnalyzeTab(QWidget):
 
         self.results = ResultsPanel()
         self.results.ladder_button.clicked.connect(self.start_ladder)
+        self.results.abx_button.clicked.connect(self._request_abx)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -343,6 +349,12 @@ class AnalyzeTab(QWidget):
         self.compare_button.setEnabled(not busy and ref is not None and test is not None)
         self.verify_button.setEnabled(not busy and ref is not None)
         self.results.ladder_button.setEnabled(not busy and self.last_result is not None)
+        self.results.abx_button.setEnabled(
+            not busy
+            and self.last_result is not None
+            and self.last_result.status == "measured"
+            and self._last_tracks is not None
+        )
         has_result = self.last_result is not None or self.last_verdict is not None
         self.report_button.setEnabled(not busy and has_result)
 
@@ -524,6 +536,10 @@ class AnalyzeTab(QWidget):
             QMessageBox.critical(self, tr("error.report"), localize(message))
             return
         self.stage.setText(tr("report.saved", name=written.name))
+
+    def _request_abx(self) -> None:
+        if self.last_result is not None and self._last_tracks is not None:
+            self.abx_requested.emit(self.last_result, *self._last_tracks)
 
     def state(self) -> AnalyzeState:
         """Dil degisiminde arayuz yeniden kurulurken tasinacak durum."""
