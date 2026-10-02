@@ -167,6 +167,10 @@ class AbxTab(QWidget):
         self.stop_play = QPushButton(tr("abx.stop_play"))
         for button in (self.play_a, self.play_b, self.play_x, self.stop_play):
             sources.addWidget(button)
+        # Calan kaynak isaretli gorunur: ayni seste gecis duyulmaz, "gecti mi"
+        # ancak boyle anlasilir. X calarken yalnizca X isaretlenir.
+        for button in (self.play_a, self.play_b, self.play_x):
+            button.setCheckable(True)
         listen.addLayout(sources)
         answers = QHBoxLayout()
         self.answer_a = QPushButton(tr("abx.x_is_a"))
@@ -207,7 +211,7 @@ class AbxTab(QWidget):
         self.play_a.clicked.connect(lambda: self.play("A"))
         self.play_b.clicked.connect(lambda: self.play("B"))
         self.play_x.clicked.connect(lambda: self.play("X"))
-        self.stop_play.clicked.connect(self.player.stop)
+        self.stop_play.clicked.connect(self.stop_playback)
         self.answer_a.clicked.connect(lambda: self.answer("A"))
         self.answer_b.clicked.connect(lambda: self.answer("B"))
         self.stop_test.clicked.connect(self.stop)
@@ -219,7 +223,7 @@ class AbxTab(QWidget):
             ("A", lambda: self.play("A")),
             ("B", lambda: self.play("B")),
             ("X", lambda: self.play("X")),
-            ("Space", self.player.stop),
+            ("Space", self.stop_playback),
         ):
             shortcut = QShortcut(QKeySequence(key), self)
             shortcut.activated.connect(action)
@@ -232,6 +236,7 @@ class AbxTab(QWidget):
         if self.session is not None and not self.session.finished:
             self.stop()
         self.player.release()
+        self._mark_playing(None)
         self.pair = pair
         self.session = None
         self.result_card.hide()
@@ -333,6 +338,7 @@ class AbxTab(QWidget):
         pair = self.pair
         if pair is None:
             return
+        self._mark_playing(None)
         try:
             self.player.load(audio)
         except RuntimeError as exc:
@@ -369,12 +375,22 @@ class AbxTab(QWidget):
         source: Source = session.x_source if which == "X" else ("A" if which == "A" else "B")
         session.note_switch()
         self.player.play(source)
+        self._mark_playing(which)
+
+    def stop_playback(self) -> None:
+        """Calmayi durdurur (test surer)."""
+        self.player.stop()
+        self._mark_playing(None)
+
+    def _mark_playing(self, which: str | None) -> None:
+        for key, button in (("A", self.play_a), ("B", self.play_b), ("X", self.play_x)):
+            button.setChecked(key == which)
 
     def answer(self, choice: Source) -> None:
         session = self.session
         if session is None or session.finished:
             return
-        self.player.stop()
+        self.stop_playback()
         feedback = session.answer(choice, float(self._timer.elapsed()))
         if feedback is not None:
             self.feedback.setText(tr("abx.correct") if feedback else tr("abx.wrong"))
@@ -387,7 +403,7 @@ class AbxTab(QWidget):
         session = self.session
         if session is None:
             return
-        self.player.stop()
+        self.stop_playback()
         session.stop()
         self._show_result()
         self._refresh()

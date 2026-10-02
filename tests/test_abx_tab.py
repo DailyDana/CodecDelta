@@ -125,14 +125,19 @@ def test_a_fixed_test_runs_without_feedback_and_logs_names_only(
     assert session is not None and player.audio is not None and player.audio.rate == 48000
     assert tab.answer_a.isEnabled() and not tab.prepare_button.isEnabled()
 
+    buttons = (tab.play_a, tab.play_b, tab.play_x)
     for _ in range(8):
         tab.play("A")
+        assert [b.isChecked() for b in buttons] == [True, False, False]
         tab.play("X")
         assert player.calls[-1] == session.x_source  # X gizli kaynagi calar
+        # Yalnizca X isaretli: A ya da B'nin isareti cevabi sizdirirdi.
+        assert [b.isChecked() for b in buttons] == [False, False, True]
         x = session.x_source
         tab.answer(x)
         assert tab.feedback.text() == ""  # deneme sirasinda geri bildirim yok
         assert player.calls[-1] == "stop"  # yanittan sonra calma durur
+        assert not any(b.isChecked() for b in buttons)
     assert session.finished and not tab.result_card.isHidden()
     assert session.verdict() == "shown"
     assert "8/8" in tab.details.text()
