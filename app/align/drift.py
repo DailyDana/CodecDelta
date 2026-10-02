@@ -75,6 +75,9 @@ MIN_ANCHORS = 12
 # capa baska bir periyot katini secer ve Theil-Sen bunlardan +3004 ppm ya da
 # "NTSC" uyduruyordu (denetim D6).
 MAX_MEDIAN_AMBIGUITY = 0.5
+# Capalarin medyan gecikmesi zarfinkine bu kadar yakinsa zarf onu dogrular
+# (zarf cozunurlugu 10 ms).
+_ENVELOPE_AGREEMENT_S = 0.02
 # Periyodiklik karari icin gereken en az capa. Fit icin gerekenden (12) az:
 # periyodik sinyalde capalar korelasyon esigine de takilabiliyor (Opus'lu iki
 # ton: 8 capa) ve karar yine acik.
@@ -331,7 +334,9 @@ def snap(ratio: float) -> tuple[float, str] | None:
     return None
 
 
-def estimate(anchors: list[Anchor], *, min_anchors: int = MIN_ANCHORS) -> DriftEstimate:
+def estimate(
+    anchors: list[Anchor], *, min_anchors: int = MIN_ANCHORS, check_periodic: bool = True
+) -> DriftEstimate:
     """Capalardan hiz oranini cikarir.
 
     Gecikme, test icindeki konumun dogrusal bir fonksiyonu kabul edilir:
@@ -353,7 +358,7 @@ def estimate(anchors: list[Anchor], *, min_anchors: int = MIN_ANCHORS) -> DriftE
             residual_ms=float("inf"),
         )
 
-    if _is_periodic(anchors):
+    if check_periodic and _is_periodic(anchors):
         return _periodic(anchors)
     x = np.array([a.position_s for a in anchors], dtype=np.float64)
     y = np.array([a.lag_s for a in anchors], dtype=np.float64)
@@ -373,6 +378,21 @@ def estimate(anchors: list[Anchor], *, min_anchors: int = MIN_ANCHORS) -> DriftE
         )
 
     return _classify(ratio, offset, len(anchors), residual_ms)
+
+
+def _envelope_confirms(match: envelope.CoarseMatch | None, anchors: list[Anchor]) -> bool:
+    """Bilgili bir zarf capalarin gecikmesini dogruluyor mu?
+
+    Periyodik sinyalde zarf duzdur (sabit ton) ya da bilgisizdir; EQ ve
+    sikistirma uygulanmis bir kopyada (farkli master) ise faz bozulmasi
+    belirsizlik oranini yukseltir ama zarf guclu eslesir ve capalar ayni
+    gecikmede toplanir. Kalibrasyonda iki boyle cift "sabit ton" diye
+    isaretleniyordu.
+    """
+    if match is None or match.rho < MIN_ENVELOPE_CORRELATION or not anchors:
+        return False
+    spread = float(np.median([abs(a.lag_s - match.lag_s) for a in anchors]))
+    return spread <= _ENVELOPE_AGREEMENT_S
 
 
 def _is_periodic(anchors: list[Anchor]) -> bool:
@@ -443,6 +463,7 @@ def estimate_from_audio(
         else None
     )
     best: tuple[float, float, DriftEstimate] | None = None
+    match: envelope.CoarseMatch | None = None
     for candidate in _HYPOTHESES:
         compensated = _Lazy(test_samples, 1.0 / candidate)
         lag_s = coarse_lag_s
@@ -485,7 +506,7 @@ def estimate_from_audio(
             )
             if len(at_zero) > len(anchors):
                 anchors = at_zero
-        if candidate == 1.0 and _is_periodic(anchors):
+        if candidate == 1.0 and _is_periodic(anchors) and not _envelope_confirms(match, anchors):
             # Hipotez yarisina sokulmaz: olceklenmis bir periyodik sinyal de
             # periyodiktir ama kaydirilmis frekans tepeleri esitsizlestirip
             # sahte bir dogru uretebiliyor (1 kHz sinus: +3004 ppm).
@@ -493,7 +514,10 @@ def estimate_from_audio(
         if len(anchors) < MIN_ANCHORS:
             continue
         score = float(np.median([abs(a.correlation) for a in anchors]))
-        residual = estimate(anchors)
+        # Periyodiklik yalnizca dogal hipotezde ve zarf kosuluyla karara baglanir
+        # (yukarida); burada yeniden sorulursa PAL hipotezinin bayragi sonuca
+        # sizip EQ'lu bir kopyayi "sabit ton" yapiyordu.
+        residual = estimate(anchors, check_periodic=False)
         if best is None or score > best[1]:
             best = (candidate, score, residual)
 

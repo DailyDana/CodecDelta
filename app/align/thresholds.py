@@ -5,8 +5,22 @@ olcumden geldigi ve orneklemin ne kadar kucuk oldugu yaziyor; kalibre edilene
 kadar bunlar KANITLI YER TUTUCU, kalibre edilmis deger degil.
 
 Neden tek dosya: bir esik koda dagilirsa hangi sayinin nereden geldigi
-kaybolur ve kalibrasyon imkansizlasir. `tools/calibrate_match.py` (henuz yok)
-etiketlenmis gercek ciftlerle bu degerleri yeniden turetecek.
+kaybolur ve kalibrasyon imkansizlasir.
+
+GERCEK VERIYLE KALIBRASYON (tools/calibrate_match.py, Ekim 2026; 21 gercek
+parca, 60 s kesitler; MP3/Opus/AAC/Vorbis 96-320 kbps):
+
+    sinif                      n    zarf rho            ince |r|
+    ayni kayit               210    0.995 .. 1.000      0.990 .. 1.000   210/210 hizali
+    farkli kayit              63    0.072 .. 0.420      -                63/63 farkli kayit
+    farkli master (SENTETIK)  21    0.506 .. 0.978      0.875 .. 0.944
+    24-64 kbps kodlama        39    -                   0.953 .. 0.997   39/39 hizali
+
+Ayni/farkli kayit ayrimi gercek veride genis (0.420 / 0.995); asagidaki
+esikler bu boslugun icinde. "Farkli master" sinifi SENTETIK (EQ + sikistirma):
+gercek remaster ciftimiz yok. Ince korelasyon farkli masteri cok dusuk bit
+hizli kodlamadan saglam ayiramiyor (0.944 / 0.953); bu yuzden ona bir hukum
+degil yalnizca bir uyari baglandi (`compare.pipeline.MASTER_SUSPECT_CORRELATION`).
 """
 
 from __future__ import annotations
