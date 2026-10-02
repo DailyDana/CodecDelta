@@ -7,8 +7,9 @@ against a YouTube rip, MP3 against AAC — and reports how much information was 
 the spectrum it went, and whether it is audible. It is also meant to answer the other common
 question from a single file with no reference: *is this FLAC really lossless, or a transcode?*
 
-> **Early version (0.4.0).** The analysis engine, the desktop window, encoding, shareable
-> reports, blind ABX testing and library scanning work; packaging is next. See [Status](#status).
+> **Version 1.0.0.** The analysis engine, the desktop window, encoding with a bitrate sweep,
+> shareable reports, blind ABX testing and library scanning work, and the app installs as a
+> regular Windows program. What has not been verified is listed under [Status](#status).
 
 ## Status
 
@@ -25,9 +26,24 @@ question from a single file with no reference: *is this FLAC really lossless, or
 | HTML report: single self-contained file, charts as inline SVG, light/dark, paths and user names removed and audited before writing | working — v0.2.0 |
 | ABX blind test: aligned, level-matched, click-free switching (8 ms linear crossfade); fixed-n, sequential and practice modes; results that never read "no difference" | working — v0.3.0 |
 | library scan: staged reference-free verification of a whole folder, resumable cache, filter, CSV export | working — v0.4.0 |
-| packaging, calibration from the user's own files | not started |
+| bitrate sweep: one codec at 96–256 kbps, SNR curve, any point sent to ABX | working — v1.0.0 |
+| match thresholds calibrated on real pairs (`tools/calibrate_match.py`) | done — v1.0.0 |
+| packaging: one-folder Windows build, per-user installer, ffmpeg download script | working — v1.0.0 |
+| threshold calibration from the user's own files | not built (see below) |
 
-611 tests, `ruff` + `mypy --strict` clean, CI on Windows.
+617 tests, `ruff` + `mypy --strict` clean, CI on Windows (including a clean-machine build of
+the packaged app).
+
+**Not verified yet:** ABX has not been tried by ear, and playback over Bluetooth (where
+buffer underruns could spoil a test) has not been measured. The "different master" class in
+the match calibration is synthetic (EQ + compression): there were no real remaster pairs, so a
+different master only produces a warning, not a verdict. Library scan speed was measured on a
+warm disk cache only. `setup-ffmpeg.ps1` was checked up to URL resolution and the capability
+test, not a full download. The packaged app was checked with its smoke test (window, report
+template, audio output), not with a full analysis inside the built executable. Calibrating the
+lossy-source thresholds from the user's own files is not built: the margins are narrow (about
+120 Hz either side of the 20.75 kHz gate) and an automatic adjustment could add false positives
+without a way to check it.
 
 ## Why this repository might be worth reading
 
@@ -76,7 +92,7 @@ These are recorded in [docs/DECISIONS.md](docs/DECISIONS.md), with the numbers b
 [docs/SPEC-alignment.md](docs/SPEC-alignment.md) is the contract for the alignment core,
 written before the code it describes.
 
-## Planned
+## What it does
 
 - Compare two files with automatic sample-accurate alignment (offsets, PAL speed-up, drift,
   polarity inversion, channel swaps), then a single-pass streaming analysis producing
@@ -93,10 +109,29 @@ written before the code it describes.
 - Batch-scan a library for files whose signatures are consistent with a lossy source.
 
 Video files are accepted as input and never have their video decoded — a 20 GB concert MKV
-costs the same as its audio track alone. This already works: probe and decode were verified
-at 1242× realtime on a real 684 s YouTube m4a.
+costs the same as its audio track alone: probe and decode were verified at 1242× realtime on
+a real 684 s YouTube m4a.
 
-## Requirements
+## Install
+
+Download or build `CodecDelta-<version>-win64.zip`, extract it, and run:
+
+```
+powershell -ExecutionPolicy Bypass -File install.ps1            # Start menu shortcut
+powershell -ExecutionPolicy Bypass -File install.ps1 -Desktop   # plus a desktop shortcut
+```
+
+It installs for the current user into `%LOCALAPPDATA%\Programs\CodecDelta` (no administrator
+rights). `install.ps1 -Uninstall` removes it; settings in `%APPDATA%\CodecDelta` stay unless
+`-Purge` is added. If no ffmpeg is found, `setup-ffmpeg.ps1` (in the same folder) downloads
+the BtbN build into `%LOCALAPPDATA%\CodecDelta\bin`, checks its digest and that it has soxr,
+and the app finds it on the next start. Alternatively: `winget install yt-dlp.FFmpeg`.
+
+To build the zip yourself from a development setup: `powershell -ExecutionPolicy Bypass -File
+tools\build.ps1`. It ends by starting the built executable with `--smoke-test` and refuses to
+zip a build that fails it.
+
+## Requirements (development)
 
 - Windows 10/11
 - Python 3.11+ (developed and tested on 3.14)
@@ -116,7 +151,10 @@ open to show errors if the window does not appear.
 ## ffmpeg
 
 CodecDelta does **not** bundle or redistribute ffmpeg; it locates an ffmpeg already present
-on the system. ffmpeg is separately licensed and its own terms govern that binary.
+on the system (its settings folder, a `bin` folder next to the executable,
+`%LOCALAPPDATA%\CodecDelta\bin`, winget, `PATH` — always requiring ffprobe in the same folder).
+`setup-ffmpeg.ps1` downloads it from its publisher on request. ffmpeg is separately licensed
+and its own terms govern that binary.
 
 ## License
 
