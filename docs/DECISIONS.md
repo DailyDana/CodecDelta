@@ -989,6 +989,6 @@ Bulgular ve durumlari: `docs/AUDIT-2026-09.md`.
   ulasilamiyordu.
 - Kullanicinin kendi dosyalariyla esik kalibrasyonu v1.0'da da YOK: v0.4.0'daki
   gerekce (dar marj, dogrulanamayan otomatik ayar) gecerli.
-- Boyut: zip 61.6 MB; en buyuk pay Qt (Qt6 bin 75 MB, icinde QtMultimedia'nin
+- Boyut: zip 62-67 MB (yerel ve CI yapilari arasinda); en buyuk pay Qt (Qt6 bin 75 MB, icinde QtMultimedia'nin
   kendi FFmpeg DLL'leri ve opengl32sw). Bunlar ABX ses cikisini bozmadan
   ayiklanabilir mi DOGRULANMADI, o yuzden dokunulmadi.
