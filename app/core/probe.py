@@ -185,6 +185,7 @@ def probe(
     has_video = False
     has_attached_pic = False
     audio_ordinal = 0
+    undecodable = 0
     for raw in streams:
         if not isinstance(raw, dict):
             continue
@@ -205,30 +206,44 @@ def probe(
         disposition = raw.get("disposition", {})
         disposition = disposition if isinstance(disposition, dict) else {}
 
-        audio.append(
-            AudioStreamInfo(
-                audio_index=audio_ordinal,
-                index=_as_int(raw.get("index")) or 0,
-                codec=str(raw.get("codec_name", "")),
-                profile=str(raw["profile"]) if raw.get("profile") else None,
-                sample_rate=_as_int(raw.get("sample_rate")) or 0,
-                channels=_as_int(raw.get("channels")) or 0,
-                channel_layout=str(raw.get("channel_layout", "")),
-                sample_fmt=str(raw.get("sample_fmt", "")),
-                # 16-bit WAV/AIFF'te ffprobe bits_per_raw_sample vermiyor (N/A),
-                # yalnizca bits_per_sample; FLAC'ta tersi (denetim D37). 0 = bilinmiyor.
-                bits_per_raw_sample=_as_int(raw.get("bits_per_raw_sample"))
-                or _as_int(raw.get("bits_per_sample"))
-                or None,
-                bit_rate=_as_int(raw.get("bit_rate")),
-                duration=_as_float(raw.get("duration")),
-                language=str(tags.get("language")) if tags.get("language") else None,
-                title=str(tags.get("title")) if tags.get("title") else None,
-                is_default=bool(disposition.get("default")),
-            )
+        stream = AudioStreamInfo(
+            audio_index=audio_ordinal,
+            index=_as_int(raw.get("index")) or 0,
+            codec=str(raw.get("codec_name", "")),
+            profile=str(raw["profile"]) if raw.get("profile") else None,
+            sample_rate=_as_int(raw.get("sample_rate")) or 0,
+            channels=_as_int(raw.get("channels")) or 0,
+            channel_layout=str(raw.get("channel_layout", "")),
+            sample_fmt=str(raw.get("sample_fmt", "")),
+            # 16-bit WAV/AIFF'te ffprobe bits_per_raw_sample vermiyor (N/A),
+            # yalnizca bits_per_sample; FLAC'ta tersi (denetim D37). 0 = bilinmiyor.
+            bits_per_raw_sample=_as_int(raw.get("bits_per_raw_sample"))
+            or _as_int(raw.get("bits_per_sample"))
+            or None,
+            bit_rate=_as_int(raw.get("bit_rate")),
+            duration=_as_float(raw.get("duration")),
+            language=str(tags.get("language")) if tags.get("language") else None,
+            title=str(tags.get("title")) if tags.get("title") else None,
+            is_default=bool(disposition.get("default")),
         )
         audio_ordinal += 1
+        if stream.sample_rate <= 0 or stream.channels <= 0:
+            # Bos ya da bozuk dosyada ffprobe 0 Hz / 0 kanalli bir iz bildiriyor;
+            # kabul edilince dogrulama ZeroDivisionError ile cokuyordu (D42).
+            # Iz sayaci yine artar: -map 0:a:N siralamasi bozulmasin.
+            undecodable += 1
+            continue
+        audio.append(stream)
 
+    if not audio and undecodable:
+        raise ProbeError(
+            Message(
+                "probe.undecodable",
+                "{name} has an audio track that could not be read (no sample rate or channel "
+                "count): the file may be empty or damaged.",
+                name=path.name,
+            )
+        )
     if not audio:
         raise ProbeError(
             Message("probe.no_audio", "{name} contains no audio track.", name=path.name)

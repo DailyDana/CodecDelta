@@ -316,3 +316,13 @@ def test_bit_depth_of_pcm_wav_and_aiff_is_read(ffmpeg_tools: FFmpegTools, tmp_pa
             check=True,
         )
         assert probe(ffmpeg_tools.ffprobe, target).audio[0].bits_per_raw_sample == 16, name
+
+
+@pytest.mark.needs_ffmpeg
+def test_an_empty_file_is_rejected(ffmpeg_tools: FFmpegTools, tmp_path: Path) -> None:
+    """0 baytlik .flac 0 Hz / 0 kanalli bir izle kabul ediliyordu (D42)."""
+    empty = tmp_path / "empty.flac"
+    empty.write_bytes(b"")
+    with pytest.raises(ProbeError) as caught:
+        probe(ffmpeg_tools.ffprobe, empty)
+    assert getattr(caught.value.args[0], "key", "") == "probe.undecodable"
