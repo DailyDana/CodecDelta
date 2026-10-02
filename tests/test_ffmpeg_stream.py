@@ -267,3 +267,37 @@ def test_non_finite_samples_become_silence(ffmpeg_tools: FFmpegTools, tmp_path: 
     result = verdict.verify(ffmpeg_tools.ffmpeg, probe(ffmpeg_tools.ffprobe, wav))
     notes = [n for n in result.notes if getattr(n, "key", "") == "single.nonfinite"]
     assert notes and notes[0].params["count"] == 2
+
+
+def test_stderr_is_drained_in_chunks_not_bytes() -> None:
+    """readline() tamponsuz boruda bayt bayt okuyordu: 12 MB 8.9 s (D38)."""
+    import io
+
+    from app.core.ffmpeg_runner import StderrCollector
+
+    class Unbuffered(io.RawIOBase):
+        """Tamponsuz boru gibi: her `read` en fazla istenen kadar, tek cagri."""
+
+        def __init__(self, data: bytes) -> None:
+            self._data = memoryview(data)
+            self.calls = 0
+
+        def readable(self) -> bool:
+            return True
+
+        def readinto(self, buffer) -> int:  # type: ignore[no-untyped-def]
+            self.calls += 1
+            n = min(len(buffer), len(self._data))
+            buffer[:n] = self._data[:n]
+            self._data = self._data[n:]
+            return n
+
+    lines = b"".join(b"frame=%07d warning: something\r\n" % i for i in range(300_000))
+    stream = Unbuffered(lines + b"last line without newline")
+    collector = StderrCollector(stream)  # type: ignore[arg-type]
+    collector.join(timeout=60)
+    tail = collector.tail().splitlines()
+    assert tail[-1] == "last line without newline"
+    assert tail[-2] == "frame=0299999 warning: something"
+    # 12 MB'lik akis parca parca okunmali; bayt bayt okuma milyonlarca cagri olurdu.
+    assert stream.calls < 1000

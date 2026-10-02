@@ -90,6 +90,10 @@ class CompletedRun:
         return self.stdout.decode("utf-8", errors="replace")
 
 
+# stderr okuma parcasi (bayt).
+_STDERR_CHUNK = 1 << 16
+
+
 class StderrCollector:
     """Bir borudan stderr'i arka planda ceken sinirli tampon.
 
@@ -106,19 +110,33 @@ class StderrCollector:
         self._thread.start()
 
     def _pump(self, stream: IO[bytes] | None) -> None:
+        """Parca parca okur, satirlara kendisi boler.
+
+        Boru tamponsuz (bufsize=0) acildigi icin `readline()` bayt bayt okuyordu:
+        12 MB stderr 8.9 s, parcayla 0.56 s (denetim D38). 64 KB'lik `read` stdout
+        icin olculen `read(n)` patolojisine girmez; o MB'larca n'de gorulmustu.
+        """
         if stream is None:
             return
+        pending = b""
         while True:
             try:
-                raw = stream.readline()
+                chunk = stream.read(_STDERR_CHUNK)
             except (ValueError, OSError):
                 # Surec oldurulunce boru kapanir; bu beklenen bir son.
+                chunk = b""
+            if not chunk:
+                if pending:
+                    self._append(pending)
                 return
-            if not raw:
-                return
-            line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
-            with self._lock:
-                self._lines.append(line)
+            *lines, pending = (pending + chunk).split(b"\n")
+            for line in lines:
+                self._append(line)
+
+    def _append(self, raw: bytes) -> None:
+        line = raw.decode("utf-8", errors="replace").rstrip("\r")
+        with self._lock:
+            self._lines.append(line)
 
     def tail(self) -> str:
         with self._lock:
