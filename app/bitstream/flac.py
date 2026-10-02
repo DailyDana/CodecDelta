@@ -58,7 +58,6 @@ BLOCK_NAMES = {
 
 # Metadata bloklari dosyanin basindadir; bu kadari her zaman yeter. Gomulu
 # kapak resmi birkac yuz KB olabilir, bu yuzden cok dar tutulmuyor.
-_HEADER_READ_BYTES = 4 << 20
 
 _ZERO_MD5 = b"\x00" * 16
 
@@ -265,36 +264,40 @@ def _id3_length(data: bytes) -> int:
 def scan(path: Path) -> FlacInfo | None:
     """Bir FLAC dosyasinin metadata bloklarini okur. FLAC degilse None."""
     file_size = path.stat().st_size
-    with path.open("rb") as fh:
-        data = fh.read(_HEADER_READ_BYTES)
-
-    id3 = _id3_length(data)
-    if data[id3 : id3 + 4] != MAGIC:
-        return None
-
-    pos = id3 + 4
     stream_info: StreamInfo | None = None
     vendor = ""
     comments: dict[str, str] = {}
     blocks: list[MetadataBlock] = []
-
-    while pos + 4 <= len(data):
-        header = data[pos : pos + 4]
-        last = bool(header[0] & 0x80)
-        block_type = header[0] & 0x7F
-        length = int.from_bytes(header[1:4], "big")
-        body_start = pos + 4
-        body = data[body_start : body_start + length]
-        blocks.append(MetadataBlock(block_type=block_type, length=length, offset=pos, last=last))
-
-        if block_type == BLOCK_STREAMINFO:
-            stream_info = parse_stream_info(body)
-        elif block_type == BLOCK_VORBIS_COMMENT and len(body) == length:
-            vendor, comments = parse_vorbis_comment(body)
-
-        pos = body_start + length
-        if last:
-            break
+    # Bloklar dosyadan tek tek okunur; yalnizca gereken govdeler bellege alinir,
+    # digerleri (kapak resmi, dolgu) atlanir. Once ilk 4 MB okunuyordu ve buyuk
+    # bir gomulu kapak onde ise vendor ve sonraki bloklar kayboluyordu (G4).
+    with path.open("rb") as fh:
+        id3 = _id3_length(fh.read(10))
+        fh.seek(id3)
+        if fh.read(4) != MAGIC:
+            return None
+        pos = id3 + 4
+        while True:
+            header = fh.read(4)
+            if len(header) < 4:
+                break
+            last = bool(header[0] & 0x80)
+            block_type = header[0] & 0x7F
+            length = int.from_bytes(header[1:4], "big")
+            blocks.append(
+                MetadataBlock(block_type=block_type, length=length, offset=pos, last=last)
+            )
+            if block_type == BLOCK_STREAMINFO:
+                stream_info = parse_stream_info(fh.read(length))
+            elif block_type == BLOCK_VORBIS_COMMENT:
+                body = fh.read(length)
+                if len(body) == length:
+                    vendor, comments = parse_vorbis_comment(body)
+            else:
+                fh.seek(length, 1)
+            pos += 4 + length
+            if last or pos > file_size:
+                break
 
     if stream_info is None:
         return None

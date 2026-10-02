@@ -368,3 +368,17 @@ def test_verify_md5_of_a_24_bit_flac(ffmpeg_tools: FFmpegTools, tmp_path: Path) 
     info = flac.scan(media)
     assert info is not None and info.stream_info.bits_per_sample == 24
     assert flac.verify_md5(ffmpeg_tools.ffmpeg, media, info.stream_info) is True
+
+
+def test_a_large_cover_does_not_hide_later_blocks(tmp_path: Path) -> None:
+    """Ilk 4 MB okunuyordu; buyuk kapak onde ise vendor kayboluyordu (G4)."""
+    cover = make_block(flac.BLOCK_PICTURE, bytes(5 << 20))
+    comment = make_block(
+        flac.BLOCK_VORBIS_COMMENT, make_vorbis_comment("reference libFLAC 1.4.3", [])
+    )
+    target = tmp_path / "cover.flac"
+    target.write_bytes(make_flac(extra_blocks=[cover, comment]))
+    info = flac.scan(target)
+    assert info is not None
+    assert info.vendor == "reference libFLAC 1.4.3"
+    assert [b.block_type for b in info.blocks][-1] == flac.BLOCK_VORBIS_COMMENT
