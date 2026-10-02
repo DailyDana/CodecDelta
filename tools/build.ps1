@@ -32,8 +32,11 @@ try {
     }
 
     $templates = Join-Path $Root 'app\report\templates'
+    $assets = Join-Path $Root 'app\ui\assets'
     & $Py -m PyInstaller --noconfirm --clean --windowed `
         --name CodecDelta `
+        --icon (Join-Path $assets 'codecdelta.ico') `
+        --add-data "$assets;app\ui\assets" `
         --distpath (Join-Path $Root 'dist') `
         --workpath (Join-Path $Root 'build') `
         --specpath (Join-Path $Root 'build') `
@@ -61,6 +64,7 @@ try {
     Remove-Item -LiteralPath $smoke -Force
     if ($report.version -ne $version) { throw "Duman testi surumu $($report.version), beklenen $version" }
     if ($report.report -ne $true) { throw "Rapor sablonu yuklenemedi: $($report.report)" }
+    if (@($report.icon).Count -eq 0) { throw 'Pencere ikonu yuklenemedi (app\ui\assets\codecdelta.ico)' }
     if ($null -eq $report.audio) {
         Write-Warning '  duman testi: ses cikis cihazi yok, ABX sesi denenemedi'
     } elseif (-not $report.audio.opened -or $report.audio.error -ne 'NoError') {

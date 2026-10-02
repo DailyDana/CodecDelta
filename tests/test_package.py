@@ -91,6 +91,7 @@ def test_smoke_test_flag(tmp_path: Path) -> None:
         assert data["error"]
     if data["audio"] is not None:
         assert data["audio"]["opened"] is True
+    assert 16 in data["icon"] and 256 in data["icon"]  # pencere ikonu yuklendi
 
 
 def test_pyproject_version_matches() -> None:
@@ -100,3 +101,22 @@ def test_pyproject_version_matches() -> None:
     pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
     data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
     assert data["project"]["version"] == app.__version__
+
+
+def test_icon_has_every_size_as_png() -> None:
+    """ICO: tools/make_icon.py'nin urettigi dokuz boyut, her biri PNG."""
+    import struct
+
+    from app.ui.theme import ICON
+
+    data = ICON.read_bytes()
+    reserved, kind, count = struct.unpack_from("<HHH", data)
+    assert (reserved, kind) == (0, 1)
+    sizes = []
+    for i in range(count):
+        side, _, _, _, _, bits, length, offset = struct.unpack_from("<BBBBHHII", data, 6 + 16 * i)
+        sizes.append(side or 256)
+        assert bits == 32
+        assert data[offset : offset + 4] == bytes((0x89, 0x50, 0x4E, 0x47))  # PNG
+        assert offset + length <= len(data)
+    assert sizes == [16, 20, 24, 32, 40, 48, 64, 128, 256]

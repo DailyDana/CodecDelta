@@ -22,6 +22,7 @@ def main(argv: list[str] | None = None) -> int:
         smoke = Path(args[at + 1]) if at + 1 < len(args) else Path("smoke.json")
         args = args[:at] + args[at + 2 :]
 
+    from PyQt6.QtGui import QIcon
     from PyQt6.QtWidgets import QApplication, QMessageBox
 
     from app.core import settings as settings_mod
@@ -29,10 +30,12 @@ def main(argv: list[str] | None = None) -> int:
     from app.core.ffmpeg_locate import discover
     from app.ui.i18n import set_language, tr
     from app.ui.main_window import MainWindow
-    from app.ui.theme import STYLESHEET
+    from app.ui.theme import ICON, STYLESHEET
 
+    _set_app_id()
     app = QApplication(sys.argv[:1])
     app.setApplicationName("CodecDelta")
+    app.setWindowIcon(QIcon(str(ICON)))
     app.setStyleSheet(STYLESHEET)
     settings = settings_mod.load()
     set_language(settings.language)
@@ -72,9 +75,25 @@ def main(argv: list[str] | None = None) -> int:
     return app.exec()
 
 
+def _set_app_id() -> None:
+    """Kaynaktan calisirken gorev cubugu Python'un degil CodecDelta'nin ikonunu gostersin.
+
+    Paketli exe'de YAPILMAZ: orada Windows ikonu exe'den alir; kisayolla
+    uyusmayan bir kimlik sabitlenmis gorev cubugu ogesini ikiye bolerdi.
+    """
+    if sys.platform != "win32" or getattr(sys, "frozen", False):
+        return
+    import contextlib
+    import ctypes
+
+    with contextlib.suppress(AttributeError, OSError):
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("DailyDana.CodecDelta")
+
+
 def _smoke_checks() -> dict[str, object]:
     """Paketlemede en kolay kopan iki parca: rapor sablonu ve Qt ses ciktisi."""
     from PyQt6.QtMultimedia import QAudioSink, QMediaDevices
+    from PyQt6.QtWidgets import QApplication
 
     from app.report import html
 
@@ -92,7 +111,9 @@ def _smoke_checks() -> dict[str, object]:
         opened = sink.start() is not None
         audio = {"device": device.description(), "opened": opened, "error": sink.error().name}
         sink.stop()
-    return {"report": report, "audio": audio}
+    # Pencere ikonu yuklendiyse ICO'daki boyutlar; yoksa bos liste.
+    icon = [size.width() for size in QApplication.windowIcon().availableSizes()]
+    return {"report": report, "audio": audio, "icon": icon}
 
 
 def _write_smoke(

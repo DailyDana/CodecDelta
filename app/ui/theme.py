@@ -6,6 +6,12 @@ Grafikler (pyqtgraph) da ayni sozlukten renk alir.
 
 from __future__ import annotations
 
+from pathlib import Path
+
+# Uygulama ikonu; tools/make_icon.py uretir. Paketli yapida da ayni goreli
+# yerde durur (build.ps1 --add-data).
+ICON = Path(__file__).with_name("assets") / "codecdelta.ico"
+
 COLORS = {
     "crust": "#11111b",
     "mantle": "#181825",
