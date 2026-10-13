@@ -1,5 +1,10 @@
 # CodecDelta
 
+[![CI](https://github.com/DailyDana/CodecDelta/actions/workflows/ci.yml/badge.svg)](https://github.com/DailyDana/CodecDelta/actions/workflows/ci.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-green.svg)](LICENSE)
+[![Platform: Windows](https://img.shields.io/badge/platform-Windows-0078D6.svg)](#)
+
 Measure what a lossy encoder actually did to your audio.
 
 CodecDelta compares two encodes of the same recording — FLAC against Opus, an original
